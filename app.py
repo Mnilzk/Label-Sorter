@@ -1,74 +1,74 @@
 import streamlit as st
-import pandas as pd
 import fitz  # PyMuPDF
-import tempfile
-import cv2
-import numpy as np
+import pandas as pd
 import easyocr
+import tempfile
+from pdf2image import convert_from_path
+from PIL import Image
 
-st.title("Label Sorter (Cloud Compatible, No Zbar)")
+st.title("Label Sorter without zbar/pyzbar")
 
-uploaded_csv = st.file_uploader("Upload your CSV", type=["csv"])
-uploaded_pdf = st.file_uploader("Upload your PDF", type=["pdf"])
+uploaded_pdf = st.file_uploader("Upload your PDF with labels", type=["pdf"])
+uploaded_csv = st.file_uploader("Upload your CSV order file", type=["csv", "xlsx"])
 
-@st.cache_data
-def read_csv(file):
-    df = pd.read_csv(file)
-    return df
-
-def pdf_page_to_image(page):
-    pix = page.get_pixmap(dpi=300)
-    img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
-    if img.shape[2] == 4:
-        img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-    return img
-
-def detect_barcode_opencv(image):
-    detector = cv2.wechat_qrcode_WeChatQRCode(
-        "detect.prototxt", "detect.caffemodel",
-        "sr.prototxt", "sr.caffemodel"
-    )
-    try:
-        barcodes, _ = detector.detectAndDecode(image)
-        return barcodes[0] if barcodes else None
-    except:
-        return None
-
-def detect_text_easyocr(image):
+if uploaded_pdf and uploaded_csv:
+    st.write("Extracting text from labels, please wait...")
     reader = easyocr.Reader(['en'], gpu=False)
-    results = reader.readtext(image)
-    if results:
-        return results[0][1]
-    return None
 
-def extract_barcodes_from_pdf(pdf_path, use_ocr_fallback=True):
-    doc = fitz.open(pdf_path)
-    barcode_results = []
-    for page_number in range(len(doc)):
-        page = doc.load_page(page_number)
-        image = pdf_page_to_image(page)
-        barcode = detect_barcode_opencv(image)
-        if barcode:
-            barcode_results.append(barcode)
-        elif use_ocr_fallback:
-            text = detect_text_easyocr(image)
-            barcode_results.append(text if text else "NOT FOUND")
-        else:
-            barcode_results.append("NOT FOUND")
-    return barcode_results
+    # 1. Read CSV order list
+    if uploaded_csv.name.endswith('.xlsx'):
+        df_orders = pd.read_excel(uploaded_csv)
+    else:
+        df_orders = pd.read_csv(uploaded_csv)
+    order_codes = df_orders.iloc[:, 0].astype(str).tolist()  # Adjust if needed
 
-if uploaded_csv and uploaded_pdf:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_pdf:
-        temp_pdf.write(uploaded_pdf.read())
-        pdf_path = temp_pdf.name
+    # 2. Convert PDF to images
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tf:
+        tf.write(uploaded_pdf.read())
+        tf.flush()
+        images = convert_from_path(tf.name, dpi=300)
 
-    df = read_csv(uploaded_csv)
-    st.write("CSV Data Preview:", df.head())
+    # 3. Extract codes from images with EasyOCR
+    pdf_labels = []
+    for idx, img in enumerate(images):
+        img_rgb = img.convert("RGB")
+        img_np = np.array(img_rgb)
+        result = reader.readtext(img_np, detail=0)
+        code_found = None
+        # Try to match OCR output to your order codes
+        for r in result:
+            for code in order_codes:
+                if code in r:
+                    code_found = code
+                    break
+            if code_found:
+                break
+        pdf_labels.append({
+            "page_idx": idx,
+            "ocr": result,
+            "order_code": code_found
+        })
 
-    with st.spinner("Extracting barcodes..."):
-        barcodes = extract_barcodes_from_pdf(pdf_path)
-        st.write("Extracted Barcodes:", barcodes)
+    # 4. Sort PDF pages according to CSV order
+    code_to_page = {label["order_code"]: label["page_idx"] for label in pdf_labels if label["order_code"]}
+    pages_sorted = [code_to_page.get(code) for code in order_codes if code in code_to_page]
 
-    # Implement your label matching logic below
+    # 5. Make new PDF
+    out_pdf = fitz.open()
+    original_pdf = fitz.open(tf.name)
+    for page_idx in pages_sorted:
+        if page_idx is not None:
+            out_pdf.insert_pdf(original_pdf, from_page=page_idx, to_page=page_idx)
+    output_path = tempfile.mktemp(suffix=".pdf")
+    out_pdf.save(output_path)
 
-    # st.download_button("Download Reordered PDF", result_bytes, file_name="reordered_labels.pdf")
+    with open(output_path, "rb") as out_file:
+        st.download_button("Download reordered PDF", data=out_file, file_name="sorted_labels.pdf")
+
+    # Debug info
+    st.write("Extracted label codes (per page):")
+    for idx, label in enumerate(pdf_labels):
+        st.write(f"Page {idx+1}: {label['ocr']}, Matched code: {label['order_code']}")
+
+else:
+    st.info("Upload both a PDF and CSV/XLSX order file to begin.")
