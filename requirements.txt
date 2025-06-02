@@ -2,6 +2,6 @@ streamlit
 pandas
 pymupdf
 pdf2image
-pyzbar
+opencv-python
 pytesseract
 Pillow
