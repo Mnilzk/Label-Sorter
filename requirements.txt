@@ -2,6 +2,4 @@ streamlit
 pandas
 pymupdf
 pdf2image
-opencv-python
-pytesseract
-Pillow
+opencv-python-headless
