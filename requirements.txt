@@ -1,6 +1,7 @@
-streamlit
-pandas
-pymupdf
 opencv-python
 easyocr
-numpy
+pandas
+streamlit
+pymupdf
+pdf2image
+pillow
