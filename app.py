@@ -1,3 +1,8 @@
+st.info(
+    "Having trouble reading a barcode or label? "
+    "If you’re using Google Chrome, right-click the label image and select "
+    "'Search image with Google Lens' for more options."
+)
 import streamlit as st
 import fitz  # PyMuPDF
 import pandas as pd
