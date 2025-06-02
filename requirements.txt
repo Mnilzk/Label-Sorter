@@ -1,5 +1,6 @@
 streamlit
 pandas
 pymupdf
-pdf2image
-opencv-python-headless
+opencv-python
+easyocr
+numpy
