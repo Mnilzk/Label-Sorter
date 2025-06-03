@@ -1,7 +1,7 @@
-opencv-python
-easyocr
-pandas
 streamlit
+pandas
+easyocr
 pymupdf
 pdf2image
 pillow
+openpyxl
