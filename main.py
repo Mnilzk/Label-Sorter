@@ -1,47 +1,46 @@
 import js
-import pandas as pd
 import io
+import pandas as pd
+from pyodide.ffi import create_proxy
 
-def handle_sort_labels(event=None):
-    # Get PDF bytes and order file bytes from JS global variables
-    pdf_bytes = js.window.pdfBytes.to_py()
-    order_bytes = js.window.orderBytes.to_py()
-    order_name = js.window.orderFileName
+def log(msg):
+    js.console.log(msg)
+    js.document.getElementById('progress').innerText = msg
 
-    # Load order codes
-    if order_name.endswith('.csv'):
-        order_df = pd.read_csv(io.BytesIO(order_bytes))
-    elif order_name.endswith('.xlsx'):
-        order_df = pd.read_excel(io.BytesIO(order_bytes))
-    else:
-        js.window.showStatus("Unsupported order file type!", "error")
-        return
+def main(pdf_bytes, csv_bytes):
+    log("Parsing order file...")
+    # Parse CSV with pandas
+    order_df = pd.read_csv(io.BytesIO(csv_bytes))
+    codes = order_df.iloc[:, 0].astype(str).tolist()
+    log(f"Read {len(codes)} order codes")
 
-    # Get first column as codes (make sure they're strings)
-    order_codes = [str(code).strip() for code in order_df.iloc[:, 0] if str(code).strip() and str(code).lower() != "nan"]
-    js.window.showStatus(f"Loaded {len(order_codes)} codes from order list.", "progress")
+    log("Loading PDF (this may take a while)...")
+    from PyPDF2 import PdfReader, PdfWriter
+    pdf_reader = PdfReader(io.BytesIO(pdf_bytes))
+    pdf_writer = PdfWriter()
 
-    # Use JS PDF.js and Tesseract to OCR/extract codes from each PDF page
-    page_codes = js.window.extractPdfCodes().to_py()  # Returns array of OCRd strings per page
+    # Simple debug: show how many pages in original PDF
+    log(f"Input PDF has {len(pdf_reader.pages)} pages.")
 
-    # Map: code in page -> page idx
-    code_to_page_idx = {}
-    for idx, text in enumerate(page_codes):
-        for code in order_codes:
-            if code in text:
-                code_to_page_idx[code] = idx
-                break
+    # Naive barcode/OCR approach - you can wire up more later
+    # For now, just output in the original order for testing
+    for i, page in enumerate(pdf_reader.pages):
+        pdf_writer.add_page(page)
+        log(f"Added page {i+1}/{len(pdf_reader.pages)}")
 
-    js.window.showStatus("Matched codes to PDF pages, reordering...", "progress")
+    log("Writing output PDF...")
+    out_buf = io.BytesIO()
+    pdf_writer.write(out_buf)
+    out_buf.seek(0)
+    log("Done!")
+    return out_buf.read()
 
-    # Compose new PDF: call JS helper to reorder PDF using the page indexes
-    sorted_pages = [code_to_page_idx[code] for code in order_codes if code in code_to_page_idx]
-    if not sorted_pages:
-        js.window.showStatus("No codes matched! Check if codes are visible in the labels.", "error")
-        return
+# Expose the function to JS
+def run_sort(pdf_bytes, csv_bytes):
+    try:
+        result = main(pdf_bytes, csv_bytes)
+        js.handlePythonResult(result)
+    except Exception as e:
+        log(f"Error: {e}")
 
-    # Call JS helper to generate new PDF, get bytes back
-    new_pdf_bytes = js.window.makeSortedPdf(sorted_pages)
-    js.window.triggerDownload(new_pdf_bytes, "sorted_labels.pdf")
-
-    js.window.showStatus(f"Done! {len(sorted_pages)} labels sorted and ready to download.", "success")
+js.run_sort = create_proxy(run_sort)
