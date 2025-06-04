@@ -1,44 +1,38 @@
 import io
-import pandas as pd
-from PyPDF2 import PdfReader, PdfWriter
+import csv
+from js import setProgress, setMessage
 
-def sort_labels_csv_only(pdf_data, order_data, setProgress, setMessage):
-    # PDF in memory
+def sort_labels_browser(pdf_data, order_data, setProgress, setMessage):
+    import PyPDF2
+
+    setMessage("Reading CSV...")
+    # Read the CSV as a list of codes (first column)
+    codes = []
+    reader = csv.reader(io.BytesIO(order_data))
+    for row in reader:
+        if row and row[0].strip():
+            codes.append(row[0].strip())
+
     setMessage("Reading PDF...")
-    pdf = PdfReader(io.BytesIO(pdf_data))
-    total = len(pdf.pages)
-    setProgress(0)
+    pdf_reader = PyPDF2.PdfReader(io.BytesIO(pdf_data))
+    num_pages = len(pdf_reader.pages)
 
-    # CSV codes
-    setMessage("Reading CSV order codes...")
-    csv_io = io.BytesIO(order_data)
-    df = pd.read_csv(csv_io, header=None)
-    codes = df.iloc[:,0].astype(str).tolist()
-
-    # Dummy logic: Assume each PDF page contains order code somewhere in text
-    setMessage("Scanning pages for order codes...")
+    # For demo: assume code matches page text (you can customize logic)
     page_map = {}
-    for i, page in enumerate(pdf.pages):
-        setProgress(int((i/total)*100))
-        text = page.extract_text() or ""
+    setMessage("Scanning PDF pages...")
+    for i, page in enumerate(pdf_reader.pages):
+        setProgress(int(100 * i / max(num_pages, 1)))
+        txt = page.extract_text() or ""
         for code in codes:
-            if code in text:
+            if code in txt:
                 page_map[code] = i
-                break
     setProgress(100)
 
-    # Reorder pages to match CSV
     setMessage("Building output PDF...")
-    writer = PdfWriter()
-    found = 0
+    writer = PyPDF2.PdfWriter()
     for code in codes:
         if code in page_map:
-            writer.add_page(pdf.pages[page_map[code]])
-            found += 1
-    setMessage(f"Done. Matched {found}/{len(codes)} codes.")
-
-    # Output as bytes
-    out = io.BytesIO()
-    writer.write(out)
-    out.seek(0)
-    return out.read()
+            writer.add_page(pdf_reader.pages[page_map[code]])
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
