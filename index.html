@@ -8,14 +8,15 @@
 <body>
   <h1>Label Sorter (Browser-based)</h1>
   <p>
-    Upload your PDF of shipping labels and a CSV file with order codes.<br>
+    Upload your PDF of shipping labels and a CSV or XLSX with order codes.<br>
     The tool will extract and reorder pages to match the order list, all on your device.
   </p>
   <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label><br>
-<label>Order CSV/XLSX: <input type="file" id="orderInput" accept=".csv,.xlsx"></label><br>  <button id="processBtn">Process</button>
-  <div id="status"></div>
-<progress id="progressBar" value="0" max="100" style="width: 300px; display: none;"></progress>
-  <a id="downloadLink" style="display:none">Download Reordered PDF</a>
+  <label>Order CSV/XLSX: <input type="file" id="orderInput" accept=".csv, .xlsx"></label><br>
+  <button id="processBtn">Process</button>
+  <div id="progress" style="margin-top:10px;"></div>
+  <progress id="progressBar" value="0" max="100" style="width: 300px; display: none; margin-bottom:10px;"></progress>
+  <a id="downloadLink" style="display:none; margin-top:15px;">Download Reordered PDF</a>
   
   <!-- PDF.js for reading PDF -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.min.js"></script>
@@ -23,6 +24,8 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
   <!-- PapaParse for CSV parsing -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <!-- XLSX.js for reading Excel files -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
   <!-- Tesseract.js for OCR -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <!-- Your main logic -->
