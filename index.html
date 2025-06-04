@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Label Sorter (CSV only, pure Python in browser)</title>
+  <title>Label Sorter (Runs in your browser!)</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 40px; }
     h1 { color: #1983e6; }
@@ -11,11 +11,11 @@
   </style>
 </head>
 <body>
-  <h1>Label Sorter (CSV only)</h1>
+  <h1>Label Sorter</h1>
   <p>
     Upload a PDF of shipping labels and a CSV order file.<br>
-    The PDF pages will be reordered to match the order list, all in your browser.<br>
-    <b>No Excel support in this version.</b>
+    The PDF will be reordered to match the order list <b>on your device</b>.<br>
+    <b>Note:</b> This runs Python in your browser using <a href="https://pyodide.org/" target="_blank">Pyodide</a>. XLSX is not supported in this version.
   </p>
   <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label>
   <br><br>
@@ -24,11 +24,11 @@
   <button id="runBtn">Sort Labels</button>
   <br>
   <progress id="progressBar" value="0" max="100" style="display:none"></progress>
-  <div id="messages">Please wait, loading Python (Pyodide)...</div>
+  <div id="messages">Loading Python (Pyodide)...</div>
   <a id="downloadLink" style="display:none; margin-top:10px;">Download Sorted PDF</a>
 
   <!-- Pyodide CDN -->
-  <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
   <script>
     let pyodideReady = false;
     let pyodide = null;
@@ -37,17 +37,17 @@
     // Load Pyodide and Python code
     async function initPyodide() {
       document.getElementById("messages").textContent = "Loading Python (Pyodide)...";
-      pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.0/full/" });
+      pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/" });
       document.getElementById("messages").textContent = "Loaded Python. Downloading logic...";
-      // Fetch main.py from your repo (or same folder)
+      // Fetch main.py from same directory (put it in the repo root!)
       mainPyCode = await fetch("main.py").then(resp => resp.text());
-      await pyodide.loadPackage(["pandas", "PyPDF2"]);
       document.getElementById("messages").textContent = "Ready! Upload files and press 'Sort Labels'.";
       pyodideReady = true;
     }
 
     initPyodide();
 
+    // Handle the button click
     document.getElementById('runBtn').onclick = async () => {
       if (!pyodideReady) {
         document.getElementById("messages").textContent = "Python still loading, please wait...";
@@ -59,31 +59,30 @@
         document.getElementById("messages").textContent = "Please select both files!";
         return;
       }
-
-      // Read files as Uint8Array for Pyodide
+      // Read files as ArrayBuffer and send to Python
+      document.getElementById("messages").textContent = "Reading files...";
       const readAsArrayBuffer = file => new Promise(res => { let r = new FileReader(); r.onload = e => res(new Uint8Array(e.target.result)); r.readAsArrayBuffer(file); });
       const pdfBuf = await readAsArrayBuffer(pdfFile);
       const orderBuf = await readAsArrayBuffer(orderFile);
 
-      // Progress helpers
-      window.setMessage = msg => { document.getElementById("messages").textContent = msg; }
-      window.setProgress = pct => {
-        let bar = document.getElementById("progressBar");
-        bar.style.display = "";
-        bar.value = pct;
-      }
+      // Set up UI for progress
+      let bar = document.getElementById("progressBar");
+      bar.style.display = "";
+      bar.value = 0;
 
-      // Register Python globals
+      // Helper: progress bar from Python
+      window.setProgress = pct => { bar.value = pct; };
+      window.setMessage = msg => { document.getElementById("messages").textContent = msg; };
+
+      // Provide buffers to Python
       pyodide.globals.set("pdf_data", pdfBuf);
       pyodide.globals.set("order_data", orderBuf);
 
+      // Run your logic
       document.getElementById("messages").textContent = "Running Python, sorting labels...";
-      document.getElementById("progressBar").style.display = "";
-      document.getElementById("progressBar").value = 0;
-
       try {
         await pyodide.runPythonAsync(mainPyCode + `
-result_bytes = sort_labels_csv_only(pdf_data, order_data, setProgress, setMessage)
+result_bytes = sort_labels_browser(pdf_data, order_data, setProgress, setMessage)
         `);
         let resultBytes = pyodide.globals.get('result_bytes').toJs();
         let blob = new Blob([resultBytes], {type: "application/pdf"});
@@ -96,7 +95,7 @@ result_bytes = sort_labels_csv_only(pdf_data, order_data, setProgress, setMessag
       } catch (err) {
         document.getElementById("messages").textContent = "Python error: " + err;
       }
-      document.getElementById("progressBar").style.display = "none";
+      bar.style.display = "none";
     }
   </script>
 </body>
