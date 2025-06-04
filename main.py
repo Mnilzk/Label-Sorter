@@ -1,46 +1,39 @@
-import js
-import io
 import pandas as pd
-from pyodide.ffi import create_proxy
+from PyPDF2 import PdfReader, PdfWriter
+import io
 
-def log(msg):
-    js.console.log(msg)
-    js.document.getElementById('progress').innerText = msg
+def sort_labels_browser(pdf_data, order_data, setProgress, setMessage):
+    setMessage("Reading order CSV...")
+    # Read CSV file to get order codes (assume first col)
+    order_csv = io.BytesIO(order_data)
+    orders = pd.read_csv(order_csv)
+    order_codes = orders.iloc[:, 0].astype(str).tolist()
 
-def main(pdf_bytes, csv_bytes):
-    log("Parsing order file...")
-    # Parse CSV with pandas
-    order_df = pd.read_csv(io.BytesIO(csv_bytes))
-    codes = order_df.iloc[:, 0].astype(str).tolist()
-    log(f"Read {len(codes)} order codes")
+    setMessage("Reading PDF...")
+    pdf_reader = PdfReader(io.BytesIO(pdf_data))
+    n_pages = len(pdf_reader.pages)
+    setMessage(f"PDF has {n_pages} pages.")
 
-    log("Loading PDF (this may take a while)...")
-    from PyPDF2 import PdfReader, PdfWriter
-    pdf_reader = PdfReader(io.BytesIO(pdf_bytes))
-    pdf_writer = PdfWriter()
+    # Use page number as "code" (in real use, add OCR/barcode here)
+    # For demo, we assume codes appear as text in PDF page text.
+    code_to_page = {}
 
-    # Simple debug: show how many pages in original PDF
-    log(f"Input PDF has {len(pdf_reader.pages)} pages.")
-
-    # Naive barcode/OCR approach - you can wire up more later
-    # For now, just output in the original order for testing
     for i, page in enumerate(pdf_reader.pages):
-        pdf_writer.add_page(page)
-        log(f"Added page {i+1}/{len(pdf_reader.pages)}")
+        setProgress(int(100 * i / n_pages))
+        text = page.extract_text() or ""
+        for code in order_codes:
+            if code in text:
+                code_to_page[code] = i
+                break
 
-    log("Writing output PDF...")
-    out_buf = io.BytesIO()
-    pdf_writer.write(out_buf)
-    out_buf.seek(0)
-    log("Done!")
-    return out_buf.read()
+    setMessage("Reordering pages...")
+    writer = PdfWriter()
+    for code in order_codes:
+        idx = code_to_page.get(code)
+        if idx is not None:
+            writer.add_page(pdf_reader.pages[idx])
 
-# Expose the function to JS
-def run_sort(pdf_bytes, csv_bytes):
-    try:
-        result = main(pdf_bytes, csv_bytes)
-        js.handlePythonResult(result)
-    except Exception as e:
-        log(f"Error: {e}")
-
-js.run_sort = create_proxy(run_sort)
+    output = io.BytesIO()
+    writer.write(output)
+    setMessage("Done!")
+    return output.getvalue()
