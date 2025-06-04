@@ -1,100 +1,108 @@
-const pdfjsLib = window['pdfjs-dist/build/pdf'];
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.worker.min.js';
+// main.js
+// Handles PDF and CSV uploads, OCR, sorting, and PDF download (all in-browser)
 
-const tesseractWorker = Tesseract.createWorker();
+// Utility: Load PDF file as ArrayBuffer
+function readFileAsArrayBuffer(file) {
+    return new Promise((resolve, reject) => {
+        let reader = new FileReader();
+        reader.onload = e => resolve(e.target.result);
+        reader.onerror = reject;
+        reader.readAsArrayBuffer(file);
+    });
+}
 
-async function extractImagesFromPDF(pdfData) {
-  const loadingTask = pdfjsLib.getDocument({ data: pdfData });
-  const pdf = await loadingTask.promise;
-  let images = [];
-  for (let i = 0; i < pdf.numPages; i++) {
-    const page = await pdf.getPage(i + 1);
+// Utility: Parse CSV to array of codes
+function parseCSV(file) {
+    return new Promise((resolve) => {
+        Papa.parse(file, {
+            complete: (results) => {
+                // Get all codes from first column
+                const codes = results.data.map(row => String(row[0]).trim()).filter(x => x);
+                resolve(codes);
+            }
+        });
+    });
+}
+
+// Render PDF page to image (needed for OCR)
+async function renderPdfPageToImage(pdf, pageIndex) {
+    const page = await pdf.getPage(pageIndex + 1);
     const viewport = page.getViewport({ scale: 2 });
     const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d');
-    canvas.height = viewport.height;
     canvas.width = viewport.width;
-    await page.render({ canvasContext: context, viewport }).promise;
-    images.push(canvas.toDataURL());
-  }
-  return images;
+    canvas.height = viewport.height;
+    const ctx = canvas.getContext('2d');
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    return canvas;
 }
 
-function parseCSVorXLSX(file, callback) {
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    let data = new Uint8Array(e.target.result);
-    let workbook = XLSX.read(data, {type: 'array'});
-    let sheet = workbook.Sheets[workbook.SheetNames[0]];
-    let json = XLSX.utils.sheet_to_json(sheet, {header:1});
-    let codes = json.map(row => String(row[0])).filter(Boolean);
-    callback(codes);
-  };
-  reader.readAsArrayBuffer(file);
+// OCR image with Tesseract.js
+async function ocrImage(canvas) {
+    const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
+    return text;
 }
 
-async function ocrImage(imageDataURL) {
-  await tesseractWorker.load();
-  await tesseractWorker.loadLanguage('eng');
-  await tesseractWorker.initialize('eng');
-  const { data: { text } } = await tesseractWorker.recognize(imageDataURL);
-  return text;
-}
-
-function downloadPDF(pagesDataURLs) {
-  const pdf = new jspdf.jsPDF();
-  pagesDataURLs.forEach((dataUrl, idx) => {
-    if(idx !== 0) pdf.addPage();
-    pdf.addImage(dataUrl, 'JPEG', 0, 0, 210, 297); // A4 size
-  });
-  pdf.save('reordered_labels.pdf');
-}
-
+// MAIN FUNCTION
 document.getElementById('processBtn').onclick = async () => {
-  const pdfFile = document.getElementById('pdfInput').files[0];
-  const orderFile = document.getElementById('orderInput').files[0];
-  const progress = document.getElementById('progress');
-  if (!pdfFile || !orderFile) {
-    progress.textContent = "Please upload both files.";
-    return;
-  }
-  progress.textContent = "Parsing order file...";
-  parseCSVorXLSX(orderFile, async orderCodes => {
-    progress.textContent = "Extracting images from PDF...";
-    const pdfData = await pdfFile.arrayBuffer();
-    const images = await extractImagesFromPDF(pdfData);
+    const pdfFile = document.getElementById('pdfInput').files[0];
+    const csvFile = document.getElementById('csvInput').files[0];
+    if (!pdfFile || !csvFile) {
+        alert("Please upload both PDF and CSV files!");
+        return;
+    }
+    document.getElementById('status').textContent = "Parsing CSV...";
+    const orderCodes = await parseCSV(csvFile);
 
-    progress.textContent = "Running OCR on labels...";
-    let codeToImage = {};
-    for (let i = 0; i < images.length; i++) {
-      progress.textContent = `OCR on page ${i + 1} of ${images.length}...`;
-      let ocrText = await ocrImage(images[i]);
-      for (let code of orderCodes) {
-        if (ocrText.includes(code)) {
-          codeToImage[code] = images[i];
-          break;
+    document.getElementById('status').textContent = "Loading PDF...";
+    // Load PDF for extraction
+    const pdfBytes = await readFileAsArrayBuffer(pdfFile);
+    const pdfjsLib = window['pdfjs-dist/build/pdf'];
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    const pdfDoc = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
+
+    // For creating new PDF
+    const PDFLib = window.PDFLib;
+    const outputPdf = await PDFLib.PDFDocument.create();
+
+    let codeToPageIdx = {};
+    let pageImgs = [];
+
+    // OCR each page
+    for (let i = 0; i < pdfDoc.numPages; i++) {
+        document.getElementById('status').textContent = `Processing page ${i + 1}/${pdfDoc.numPages}...`;
+        const canvas = await renderPdfPageToImage(pdfDoc, i);
+        const ocrText = await ocrImage(canvas);
+
+        // Try to match with orderCodes
+        for (let code of orderCodes) {
+            if (ocrText.includes(code)) {
+                codeToPageIdx[code] = i;
+                break;
+            }
         }
-      }
+        // Save canvas as PNG for PDF creation
+        pageImgs.push(canvas.toDataURL("image/png"));
     }
-    progress.textContent = "Reordering pages and generating PDF...";
 
-    let pagesInOrder = [];
+    // Add matched pages to output PDF in order
     for (let code of orderCodes) {
-      if (codeToImage[code]) pagesInOrder.push(codeToImage[code]);
+        if (codeToPageIdx[code] !== undefined) {
+            const pngUrl = pageImgs[codeToPageIdx[code]];
+            const page = await outputPdf.addPage();
+            const pngImage = await outputPdf.embedPng(pngUrl);
+            const { width, height } = pngImage.scale(1);
+            page.setSize(width, height);
+            page.drawImage(pngImage, { x: 0, y: 0, width, height });
+        }
     }
 
-    if (!pagesInOrder.length) {
-      progress.textContent = "No matching codes found!";
-      return;
-    }
+    // Download the new PDF
+    const outBytes = await outputPdf.save();
+    const blob = new Blob([outBytes], { type: "application/pdf" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "sorted_labels.pdf";
+    link.click();
 
-    // Use jsPDF to save PDF
-    const jsPDFScript = document.createElement('script');
-    jsPDFScript.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
-    jsPDFScript.onload = () => {
-      downloadPDF(pagesInOrder);
-      progress.textContent = "Done! Download should start.";
-    };
-    document.body.appendChild(jsPDFScript);
-  });
+    document.getElementById('status').textContent = "Done!";
 };
