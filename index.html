@@ -5,10 +5,19 @@
   <title>Label Sorter (Browser-based, No Server)</title>
   <link rel="stylesheet" href="style.css">
   <style>
-    body { font-family: Arial, sans-serif; }
-    h1 { color: #0784e6; }
-    #progressBar { width: 300px; display: none; margin-bottom: 10px; }
-    #downloadLink { display: none; margin-top: 15px; }
+    #progressBar {
+      width: 300px;
+      display: none;
+      margin-bottom: 10px;
+    }
+    #downloadLink {
+      display: none;
+      margin-top: 15px;
+    }
+    #progress {
+      margin-top: 10px;
+      margin-bottom: 10px;
+    }
   </style>
 </head>
 <body>
@@ -17,25 +26,24 @@
     Upload your PDF of shipping labels and a CSV or XLSX with order codes.<br>
     The tool will extract and reorder pages to match the order list, all on your device.
   </p>
-  <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label><br><br>
-  <label>Order CSV/XLSX: <input type="file" id="orderInput" accept=".csv,.xlsx"></label><br><br>
+  <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label><br>
+  <label>Order CSV/XLSX: <input type="file" id="orderInput" accept=".csv,.xlsx"></label><br>
   <button id="processBtn">Process</button>
-  <div id="progress" style="margin-top:10px; color:#333;"></div>
+  <div id="progress"></div>
   <progress id="progressBar" value="0" max="100"></progress>
-  <br>
   <a id="downloadLink">Download Reordered PDF</a>
   
-  <!-- PDF.js for reading PDF (USE 3.11.174 for compatibility) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!-- PDF.js for reading PDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.min.js"></script>
   <!-- PDF-lib for creating PDFs -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
   <!-- PapaParse for CSV parsing -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
   <!-- XLSX.js for reading Excel files -->
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
   <!-- Tesseract.js for OCR -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-
+  
   <script>
     // Utility: Load PDF file as ArrayBuffer
     function readFileAsArrayBuffer(file) {
@@ -98,6 +106,12 @@
       const progressBar = document.getElementById('progressBar');
       const downloadLink = document.getElementById('downloadLink');
 
+      // Reset UI
+      progressDiv.textContent = "";
+      downloadLink.style.display = "none";
+      progressBar.style.display = "none";
+      progressBar.value = 0;
+
       if (!pdfInput.files.length || !orderInput.files.length) {
         progressDiv.textContent = "Please upload both PDF and CSV/XLSX files!";
         alert("Please upload both PDF and CSV/XLSX files!");
@@ -107,27 +121,26 @@
       const orderFile = orderInput.files[0];
 
       progressDiv.textContent = "Parsing order file...";
-      progressBar.style.display = "none";
+      progressBar.style.display = "block";
       progressBar.value = 0;
-      downloadLink.style.display = "none";
 
       const orderCodes = await parseOrderFile(orderFile);
 
       progressDiv.textContent = "Loading PDF...";
       const pdfBytes = await readFileAsArrayBuffer(pdfFile);
-      if (!window.pdfjsLib) {
-        progressDiv.style.color = "#c00";
+      // Fix: PDF.js API is now on window["pdfjsLib"]
+      const pdfjsLib = window["pdfjsLib"] || window["pdfjs-dist/build/pdf"];
+      if (!pdfjsLib) {
         progressDiv.textContent = "PDF.js did not load. Please refresh or check your CDN scripts!";
         return;
       }
-      const pdfjsLib = window.pdfjsLib;
-      pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      if (!pdfjsLib.GlobalWorkerOptions) pdfjsLib.GlobalWorkerOptions = {};
+      pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.worker.min.js";
       const pdfDoc = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
 
-      // Set up the progress bar
       progressBar.max = pdfDoc.numPages;
       progressBar.value = 0;
-      progressBar.style.display = "";
+      progressBar.style.display = "block";
 
       // For creating new PDF
       const PDFLib = window.PDFLib;
@@ -138,7 +151,7 @@
 
       // OCR each page, update progress
       for (let i = 0; i < pdfDoc.numPages; i++) {
-        progressDiv.textContent = `Processing page ${i + 1} of ${pdfDoc.numPages}...`;
+        progressDiv.textContent = `Processing page ${i + 1} of ${pdfDoc.numPages}... (OCR is slow in browser, be patient)`;
         progressBar.value = i;
         const canvas = await renderPdfPageToImage(pdfDoc, i);
         const ocrText = await ocrImage(canvas);
@@ -156,6 +169,7 @@
       progressBar.value = pdfDoc.numPages;
 
       // Add matched pages to output PDF in order
+      let pageCount = 0;
       for (let code of orderCodes) {
         if (codeToPageIdx[code] !== undefined) {
           const pngUrl = pageImgs[codeToPageIdx[code]];
@@ -164,7 +178,14 @@
           const { width, height } = pngImage.scale(1);
           page.setSize(width, height);
           page.drawImage(pngImage, { x: 0, y: 0, width, height });
+          pageCount++;
         }
+      }
+
+      if (pageCount === 0) {
+        progressDiv.textContent = "No matching codes found in PDF pages! Try a clearer PDF or CSV/XLSX.";
+        progressBar.style.display = "none";
+        return;
       }
 
       // Download the new PDF
@@ -172,10 +193,10 @@
       const blob = new Blob([outBytes], { type: "application/pdf" });
       downloadLink.href = URL.createObjectURL(blob);
       downloadLink.download = "sorted_labels.pdf";
-      downloadLink.style.display = "";
+      downloadLink.style.display = "inline-block";
       downloadLink.textContent = "Download Reordered PDF";
 
-      progressDiv.textContent = "Done!";
+      progressDiv.textContent = `Done! Processed and matched ${pageCount} pages.`;
       progressBar.style.display = "none";
     };
   </script>
