@@ -109,9 +109,14 @@
 
       progressDiv.textContent = "Loading PDF...";
       const pdfBytes = await readFileAsArrayBuffer(pdfFile);
-      const pdfjsLib = window['pdfjs-dist/build/pdf'];
-      pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.worker.min.js";
-      const pdfDoc = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
+
+      // ---- THE FIX IS HERE: use global pdfjsLib ----
+      if (!window.pdfjsLib) {
+        alert("PDF.js did not load. Please refresh or check your CDN scripts!");
+        return;
+      }
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.worker.min.js";
+      const pdfDoc = await window.pdfjsLib.getDocument({ data: pdfBytes }).promise;
 
       // Set up the progress bar
       progressBar.max = pdfDoc.numPages;
