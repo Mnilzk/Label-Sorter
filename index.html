@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Label Sorter (Browser-based, No Server)</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <h1>Label Sorter (Browser-based)</h1>
+  <p>
+    Upload your PDF of shipping labels and a CSV/XLSX with order codes.<br>
+    The tool will extract and reorder pages to match the order list, all on your device.
+  </p>
+  <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label><br>
+  <label>Order CSV/XLSX: <input type="file" id="orderInput" accept=".csv, .xlsx"></label><br>
+  <button id="processBtn">Process</button>
+  <div id="progress"></div>
+  <a id="downloadLink" style="display:none">Download Reordered PDF</a>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
