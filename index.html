@@ -12,20 +12,21 @@
   </style>
 </head>
 <body>
-  <h1>Label Sorter Leonid Helloe Man</h1>
+  <h1>Label Sorter</h1>
   <p>
     Upload a PDF of shipping labels and a CSV/XLSX order file.<br>
     The pages will be reordered to match the order list on your device.<br>
-    <b>Note:</b> This runs pure Python in your browser using <a href="https://pyodide.org/" target="_blank">Pyodide</a>.
+    <b>Note:</b> Runs Python in your browser with <a href="https://pyodide.org/" target="_blank">Pyodide</a>.<br>
+    <span style="color:#a44;">If you see "main.py not found", upload main.py to your repo root.</span>
   </p>
   <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label>
   <br><br>
   <label>Order CSV/XLSX: <input type="file" id="orderInput" accept=".csv,.xlsx"></label>
   <br><br>
-  <button id="runBtn">Sort Labels</button>
+  <button id="processBtn">Sort Labels</button>
   <br>
   <progress id="progressBar" value="0" max="100" style="display:none"></progress>
-  <div id="messages">Please wait, loading Python...</div>
+  <div id="progress" style="margin-top:10px;">Loading Pyodide (Python in browser)...</div>
   <a id="downloadLink" style="display:none; margin-top:10px;">Download Sorted PDF</a>
 
   <!-- Pyodide CDN -->
@@ -35,54 +36,60 @@
     let pyodide = null;
     let mainPyCode = null;
 
-    // Load Pyodide and Python code
+    // Load Pyodide and main.py
     async function initPyodide() {
-      document.getElementById("messages").textContent = "Please wait, loading Python runtime (Pyodide)...";
+      document.getElementById('progress').innerText = "Loading Pyodide (Python in browser)...";
       pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/" });
-      document.getElementById("messages").textContent = "Python loaded. Loading main logic...";
-      // Fetch main.py from your repo
-      mainPyCode = await fetch("main.py").then(resp => resp.text());
-      await pyodide.loadPackage(["micropip", "pandas", "openpyxl", "PyPDF2"]);
-      document.getElementById("messages").textContent = "Ready! Upload files and press 'Sort Labels'.";
+      document.getElementById('progress').innerText = "Loaded Python. Downloading logic...";
+      try {
+        mainPyCode = await fetch("main.py").then(r => r.text());
+      } catch (e) {
+        document.getElementById('progress').innerText = "Error: main.py not found!";
+        return;
+      }
+      await pyodide.loadPackage(['micropip', 'pandas', 'openpyxl', 'PyPDF2']);
       pyodideReady = true;
+      document.getElementById('progress').innerText = "Ready! Upload your files and press 'Sort Labels'.";
     }
-
     initPyodide();
 
-    // Handle the button click
-    document.getElementById('runBtn').onclick = async () => {
+    // Expose JS progress and message functions to Python
+    window.setProgress = pct => {
+      let bar = document.getElementById("progressBar");
+      bar.style.display = "";
+      bar.value = pct;
+    }
+    window.setMessage = msg => {
+      document.getElementById("progress").innerText = msg;
+    }
+
+    document.getElementById('processBtn').onclick = async () => {
       if (!pyodideReady) {
-        document.getElementById("messages").textContent = "Python still loading, please wait...";
+        document.getElementById('progress').innerText = "Please wait for Python to load...";
         return;
       }
       let pdfFile = document.getElementById('pdfInput').files[0];
       let orderFile = document.getElementById('orderInput').files[0];
       if (!pdfFile || !orderFile) {
-        document.getElementById("messages").textContent = "Please select both files!";
+        document.getElementById("progress").innerText = "Please select both files!";
         return;
       }
-      // Read files as ArrayBuffer and send to Python
+      // Reset download link and progress bar
+      document.getElementById("downloadLink").style.display = "none";
+      document.getElementById("progressBar").style.display = "";
+      document.getElementById("progressBar").value = 0;
+
+      // Read files as ArrayBuffer
       const readAsArrayBuffer = file => new Promise(res => { let r = new FileReader(); r.onload = e => res(new Uint8Array(e.target.result)); r.readAsArrayBuffer(file); });
       const pdfBuf = await readAsArrayBuffer(pdfFile);
       const orderBuf = await readAsArrayBuffer(orderFile);
 
-      // Expose progress update from Python
-      window.setProgress = pct => {
-        let bar = document.getElementById("progressBar");
-        bar.style.display = "";
-        bar.value = pct;
-      }
-      window.setMessage = msg => { document.getElementById("messages").textContent = msg; }
-
-      // Register Python helpers
+      // Make buffers available in Python
       pyodide.globals.set("pdf_data", pdfBuf);
       pyodide.globals.set("order_data", orderBuf);
 
-      // Now run your main logic (see below for main.py)
-      document.getElementById("messages").textContent = "Running Python, sorting labels...";
-      document.getElementById("progressBar").style.display = "";
-      document.getElementById("progressBar").value = 0;
-
+      // Run your Python main logic
+      document.getElementById("progress").innerText = "Running Python, sorting labels...";
       try {
         await pyodide.runPythonAsync(mainPyCode + `
 result_bytes = sort_labels_browser(pdf_data, order_data, setProgress, setMessage)
@@ -94,12 +101,12 @@ result_bytes = sort_labels_browser(pdf_data, order_data, setProgress, setMessage
         link.href = url;
         link.style.display = "";
         link.textContent = "Download Sorted PDF";
-        document.getElementById("messages").textContent = "Done! Download your sorted PDF.";
+        document.getElementById("progress").innerText = "Done! Download your sorted PDF.";
       } catch (err) {
-        document.getElementById("messages").textContent = "Python error: " + err;
+        document.getElementById("progress").innerText = "Python error: " + err;
       }
       document.getElementById("progressBar").style.display = "none";
-    }
+    };
   </script>
 </body>
 </html>
