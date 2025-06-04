@@ -1,8 +1,0 @@
-services:
-  - type: web
-    name: label-sorter
-    env: python
-    buildCommand: |
-      apt-get update && apt-get install -y libzbar0 poppler-utils tesseract-ocr
-      pip install -r requirements.txt
-    startCommand: streamlit run app.py --server.port $PORT --server.address 0.0.0.0
