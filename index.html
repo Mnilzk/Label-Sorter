@@ -2,100 +2,73 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Label Sorter (Pure Browser/Pyodide, CSV only)</title>
+  <title>Label Sorter (Pyodide, CSV-only)</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 40px; }
-    h1 { color: #1983e6; }
-    #progressBar { width: 70%; height: 18px; margin-top: 10px; }
+    #progressBar { width: 70%; height: 18px; }
     #messages { color: #444; margin-top: 15px; }
   </style>
 </head>
 <body>
-  <h1>Label Sorter (CSV only, all in your browser)</h1>
+  <h1>Label Sorter (CSV only, runs in your browser!)</h1>
   <p>
-    Upload your <b>PDF</b> of shipping labels and a <b>CSV</b> order file.<br>
-    The pages will be reordered to match the order list on your device.<br>
-    <b>Note:</b> This uses pure Python in your browser (<a href="https://pyodide.org/" target="_blank">Pyodide</a>).
+    Upload your PDF of shipping labels and a CSV file with order codes.<br>
+    The tool will reorder the PDF pages to match the order list, all on your device.<br>
+    <b>Note:</b> No files are uploaded to any server.
   </p>
-  <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label>
-  <br><br>
-  <label>Order CSV: <input type="file" id="csvInput" accept=".csv"></label>
-  <br><br>
+  <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label><br><br>
+  <label>Order CSV: <input type="file" id="orderInput" accept=".csv"></label><br><br>
   <button id="runBtn">Sort Labels</button>
   <br>
   <progress id="progressBar" value="0" max="100" style="display:none"></progress>
-  <div id="messages">Please wait, loading Python...</div>
+  <div id="messages">Loading Python...</div>
   <a id="downloadLink" style="display:none; margin-top:10px;">Download Sorted PDF</a>
-
-  <!-- Pyodide CDN -->
+  <!-- Pyodide -->
   <script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
   <script>
-    let pyodideReady = false;
-    let pyodide = null;
-    let mainPyCode = null;
+    let pyodide = null, pyReady = false, mainPyCode = "";
 
-    // Load Pyodide and Python code
-    async function initPyodide() {
+    async function loadPy() {
       document.getElementById("messages").textContent = "Loading Python runtime (Pyodide)...";
       pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/" });
-      document.getElementById("messages").textContent = "Loaded Python. Downloading logic...";
-      // Fetch main.py from your repo (must be in the same directory as index.html)
-      mainPyCode = await fetch("main.py").then(resp => resp.text());
-      document.getElementById("messages").textContent = "Installing pandas...";
+      document.getElementById("messages").textContent = "Loaded Python. Installing pandas...";
       await pyodide.loadPackage("pandas");
-      document.getElementById("messages").textContent = "Ready! Upload files and press 'Sort Labels'.";
-      pyodideReady = true;
+      document.getElementById("messages").textContent = "Loaded Python. Downloading logic...";
+      // Fetch main.py from the same folder as index.html
+      mainPyCode = await fetch("main.py").then(r => r.text());
+      pyReady = true;
+      document.getElementById("messages").textContent = "Ready! Upload files and click Sort Labels.";
     }
+    loadPy();
 
-    initPyodide();
-
-    // Button click handler
-    document.getElementById('runBtn').onclick = async () => {
-      if (!pyodideReady) {
-        document.getElementById("messages").textContent = "Python still loading, please wait...";
-        return;
-      }
+    document.getElementById("runBtn").onclick = async () => {
+      if (!pyReady) { document.getElementById("messages").textContent = "Please wait for Python to load..."; return; }
       let pdfFile = document.getElementById('pdfInput').files[0];
-      let csvFile = document.getElementById('csvInput').files[0];
-      if (!pdfFile || !csvFile) {
-        document.getElementById("messages").textContent = "Please select both files!";
-        return;
-      }
-      // Read files as ArrayBuffer and send to Python
-      const readAsArrayBuffer = file => new Promise(res => { let r = new FileReader(); r.onload = e => res(new Uint8Array(e.target.result)); r.readAsArrayBuffer(file); });
-      const pdfBuf = await readAsArrayBuffer(pdfFile);
-      const csvBuf = await readAsArrayBuffer(csvFile);
-
-      // Expose progress update from Python
-      window.setProgress = pct => {
-        let bar = document.getElementById("progressBar");
-        bar.style.display = "";
-        bar.value = pct;
-      }
-      window.setMessage = msg => { document.getElementById("messages").textContent = msg; }
-
-      // Register Python helpers
-      pyodide.globals.set("pdf_data", pdfBuf);
-      pyodide.globals.set("csv_data", csvBuf);
-
-      document.getElementById("messages").textContent = "Running Python, sorting labels...";
-      document.getElementById("progressBar").style.display = "";
-      document.getElementById("progressBar").value = 0;
-
+      let csvFile = document.getElementById('orderInput').files[0];
+      if (!pdfFile || !csvFile) { document.getElementById("messages").textContent = "Please select both files."; return; }
+      document.getElementById("progressBar").style.display = ""; document.getElementById("progressBar").value = 5;
+      document.getElementById("messages").textContent = "Reading files...";
+      // Read files as Uint8Array
+      let pdfBuf = new Uint8Array(await pdfFile.arrayBuffer());
+      let csvStr = await csvFile.text();
+      // Provide browser-side progress function
+      pyodide.globals.set("setProgress", pct => document.getElementById("progressBar").value = pct);
+      pyodide.globals.set("setMessage", msg => document.getElementById("messages").textContent = msg);
+      pyodide.globals.set("pdf_bytes", pdfBuf);
+      pyodide.globals.set("csv_text", csvStr);
+      document.getElementById("messages").textContent = "Running label sort...";
       try {
         await pyodide.runPythonAsync(mainPyCode + `
-result_bytes = sort_labels_browser(pdf_data, csv_data, setProgress, setMessage)
+result_bytes = sort_labels_browser(pdf_bytes, csv_text, setProgress, setMessage)
         `);
         let resultBytes = pyodide.globals.get('result_bytes').toJs();
         let blob = new Blob([resultBytes], {type: "application/pdf"});
         let url = URL.createObjectURL(blob);
         let link = document.getElementById("downloadLink");
-        link.href = url;
-        link.style.display = "";
-        link.textContent = "Download Sorted PDF";
+        link.href = url; link.style.display = ""; link.textContent = "Download Sorted PDF";
         document.getElementById("messages").textContent = "Done! Download your sorted PDF.";
-      } catch (err) {
-        document.getElementById("messages").textContent = "Python error: " + err;
+      } catch (e) {
+        document.getElementById("messages").textContent = "Python error: " + e;
       }
       document.getElementById("progressBar").style.display = "none";
     }
