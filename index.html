@@ -5,18 +5,18 @@
   <title>Label Sorter (Browser-based, No Server)</title>
   <link rel="stylesheet" href="style.css">
   <style>
-    body { font-family: sans-serif; margin: 40px; }
-    #progress { margin-top: 10px; }
-    #progressBar { width: 300px; display: none; margin-bottom: 10px; }
-    #downloadLink { display: none; margin-top: 15px; }
+    body { font-family: sans-serif; margin: 40px; background: #fafbfc; }
+    h1 { color: #254769; }
+    #progress { margin: 12px 0; }
+    #progressBar { width: 350px; height: 18px; display: none; }
+    #downloadLink { display: none; margin-top: 20px; font-weight: bold; }
   </style>
 </head>
 <body>
   <h1>Label Sorter (Browser-based)</h1>
   <p>
     Upload your PDF of shipping labels and a CSV or XLSX with order codes.<br>
-    The tool will extract and reorder pages to match the order list, all on your device.<br>
-    <b>Processing may take several minutes for large PDFs.</b>
+    All work is done in your browser—no server, no upload!
   </p>
   <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label><br>
   <label>Order CSV/XLSX: <input type="file" id="orderInput" accept=".csv,.xlsx"></label><br>
@@ -24,20 +24,14 @@
   <div id="progress"></div>
   <progress id="progressBar" value="0" max="100"></progress>
   <a id="downloadLink">Download Reordered PDF</a>
-  
-  <!-- PDF.js for reading PDF -->
-  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.2.67/build/pdf.min.js"></script>
-  <!-- PDF-lib for creating PDFs -->
+
+  <!-- Dependencies -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
-  <!-- PapaParse for CSV parsing -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-  <!-- XLSX.js for reading Excel files -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
-  <!-- Tesseract.js for OCR -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-  
   <script>
-    // Utility: Load PDF file as ArrayBuffer
     function readFileAsArrayBuffer(file) {
       return new Promise((resolve, reject) => {
         let reader = new FileReader();
@@ -46,33 +40,37 @@
         reader.readAsArrayBuffer(file);
       });
     }
-
-    // Utility: Parse CSV or XLSX to array of codes
     function parseOrderFile(file) {
-      return new Promise((resolve) => {
+      return new Promise((resolve, reject) => {
         if (file.name.endsWith(".csv")) {
           Papa.parse(file, {
-            complete: (results) => {
+            complete: results => {
               const codes = results.data.map(row => String(row[0]).trim()).filter(x => x && x !== "undefined");
               resolve(codes);
-            }
+            },
+            error: reject
           });
         } else if (file.name.endsWith(".xlsx")) {
           const reader = new FileReader();
           reader.onload = (e) => {
-            const data = new Uint8Array(e.target.result);
-            const workbook = XLSX.read(data, { type: "array" });
-            const sheet = workbook.Sheets[workbook.SheetNames[0]];
-            const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-            const codes = rows.map(row => String(row[0]).trim()).filter(x => x && x !== "undefined");
-            resolve(codes);
+            try {
+              const data = new Uint8Array(e.target.result);
+              const workbook = XLSX.read(data, { type: "array" });
+              const sheet = workbook.Sheets[workbook.SheetNames[0]];
+              const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+              const codes = rows.map(row => String(row[0]).trim()).filter(x => x && x !== "undefined");
+              resolve(codes);
+            } catch (err) {
+              reject(err);
+            }
           };
+          reader.onerror = reject;
           reader.readAsArrayBuffer(file);
+        } else {
+          reject("Unsupported file type");
         }
       });
     }
-
-    // Render PDF page to image (needed for OCR)
     async function renderPdfPageToImage(pdf, pageIndex) {
       const page = await pdf.getPage(pageIndex + 1);
       const viewport = page.getViewport({ scale: 2 });
@@ -83,8 +81,6 @@
       await page.render({ canvasContext: ctx, viewport }).promise;
       return canvas;
     }
-
-    // OCR image with Tesseract.js
     async function ocrImage(canvas) {
       const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
       return text;
@@ -96,11 +92,12 @@
       const progressDiv = document.getElementById('progress');
       const progressBar = document.getElementById('progressBar');
       const downloadLink = document.getElementById('downloadLink');
-      progressDiv.textContent = "";
+
+      // Reset UI
       downloadLink.style.display = "none";
       progressBar.style.display = "none";
+      progressBar.value = 0;
 
-      // SAFETY: Check file inputs
       if (!pdfInput.files.length || !orderInput.files.length) {
         progressDiv.textContent = "Please upload both PDF and CSV/XLSX files!";
         alert("Please upload both PDF and CSV/XLSX files!");
@@ -110,59 +107,70 @@
       const orderFile = orderInput.files[0];
 
       progressDiv.textContent = "Parsing order file...";
-      progressBar.value = 0;
-      progressBar.max = 100;
-      progressBar.style.display = "block";
-
-      const orderCodes = await parseOrderFile(orderFile);
-
-      progressDiv.textContent = "Loading PDF...";
-      const pdfBytes = await readFileAsArrayBuffer(pdfFile);
-
-      // Setup pdf.js worker
-      if (window.pdfjsLib) {
-        pdfjsLib.GlobalWorkerOptions.workerSrc =
-          "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.2.67/build/pdf.worker.min.js";
-      } else {
-        progressDiv.textContent = "PDF.js did not load. Please refresh or check your CDN scripts!";
+      let orderCodes;
+      try {
+        orderCodes = await parseOrderFile(orderFile);
+      } catch (e) {
+        progressDiv.textContent = "Error reading order file: " + e;
+        return;
+      }
+      if (!orderCodes.length) {
+        progressDiv.textContent = "No order codes found in file!";
         return;
       }
 
-      const pdfDoc = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
-
-      // For creating new PDF
-      const PDFLib = window.PDFLib;
-      const outputPdf = await PDFLib.PDFDocument.create();
-
-      let codeToPageIdx = {};
-      let pageImgs = [];
+      progressDiv.textContent = "Loading PDF...";
+      let pdfBytes, pdfjsLib, pdfDoc;
+      try {
+        pdfBytes = await readFileAsArrayBuffer(pdfFile);
+        pdfjsLib = window.pdfjsLib || window["pdfjs-dist/build/pdf"];
+        if (!pdfjsLib) throw "PDF.js did not load. Please refresh or check your CDN scripts!";
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.worker.min.js";
+        pdfDoc = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
+      } catch (e) {
+        progressDiv.textContent = "Error loading PDF: " + e;
+        return;
+      }
 
       progressBar.max = pdfDoc.numPages;
       progressBar.value = 0;
-      progressDiv.textContent = `Processing ${pdfDoc.numPages} pages...`;
+      progressBar.style.display = "";
+      progressDiv.textContent = "Processing and OCR...";
 
-      // OCR each page, update progress
+      const PDFLib = window.PDFLib;
+      const outputPdf = await PDFLib.PDFDocument.create();
+      let codeToPageIdx = {};
+      let pageImgs = [];
+      let errorDuringOCR = false;
+
+      // OCR each page
       for (let i = 0; i < pdfDoc.numPages; i++) {
         progressDiv.textContent = `Processing page ${i + 1} of ${pdfDoc.numPages}...`;
         progressBar.value = i + 1;
-        await new Promise(r => setTimeout(r, 50)); // Slight delay for UI
-
-        const canvas = await renderPdfPageToImage(pdfDoc, i);
-        const ocrText = await ocrImage(canvas);
-
-        // Try to match with orderCodes
-        for (let code of orderCodes) {
-          if (ocrText.includes(code)) {
-            codeToPageIdx[code] = i;
-            break;
+        try {
+          const canvas = await renderPdfPageToImage(pdfDoc, i);
+          const ocrText = await ocrImage(canvas);
+          for (let code of orderCodes) {
+            if (ocrText.includes(code)) {
+              codeToPageIdx[code] = i;
+              break;
+            }
           }
+          pageImgs.push(canvas.toDataURL("image/png"));
+        } catch (err) {
+          errorDuringOCR = true;
+          progressDiv.textContent = "OCR error on page " + (i + 1) + ": " + err;
+          break;
         }
-        // Save canvas as PNG for PDF creation
-        pageImgs.push(canvas.toDataURL("image/png"));
       }
-      progressBar.value = pdfDoc.numPages;
+
+      if (errorDuringOCR) {
+        progressBar.style.display = "none";
+        return;
+      }
 
       // Add matched pages to output PDF in order
+      let matched = 0;
       for (let code of orderCodes) {
         if (codeToPageIdx[code] !== undefined) {
           const pngUrl = pageImgs[codeToPageIdx[code]];
@@ -171,7 +179,14 @@
           const { width, height } = pngImage.scale(1);
           page.setSize(width, height);
           page.drawImage(pngImage, { x: 0, y: 0, width, height });
+          matched++;
         }
+      }
+
+      if (!matched) {
+        progressDiv.textContent = "No matching pages found! Check your order codes and PDF.";
+        progressBar.style.display = "none";
+        return;
       }
 
       // Download the new PDF
@@ -182,7 +197,7 @@
       downloadLink.style.display = "inline-block";
       downloadLink.textContent = "Download Reordered PDF";
 
-      progressDiv.textContent = "Done!";
+      progressDiv.textContent = `Done! Processed ${matched} pages.`;
       progressBar.style.display = "none";
     };
   </script>
