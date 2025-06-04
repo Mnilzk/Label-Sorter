@@ -1,30 +1,33 @@
-# main.py - for Pyodide (no pandas needed!)
 import io
-import csv
+import pandas as pd
 from PyPDF2 import PdfReader, PdfWriter
 
-def sort_labels_browser(pdf_bytes, csv_bytes, setProgress=None, setMessage=None):
-    if setMessage: setMessage("Reading order from CSV...")
-    # Parse CSV order codes
-    codes = []
-    with io.StringIO(csv_bytes.tobytes().decode('utf-8')) as f:
-        reader = csv.reader(f)
-        for row in reader:
-            if row and row[0].strip():
-                codes.append(row[0].strip())
-
-    if setMessage: setMessage("Reading PDF...")
-    pdf = PdfReader(io.BytesIO(pdf_bytes))
-    writer = PdfWriter()
-
-    if setMessage: setMessage("Sorting pages (no OCR, barcode, or matching, just as demo)...")
-    # This DEMO just adds all pages in original order (change to match logic)
-    for idx, code in enumerate(codes):
-        if idx < len(pdf.pages):
-            writer.add_page(pdf.pages[idx])
+def sort_labels_browser(pdf_data, csv_data, setProgress=None, setMessage=None):
+    if setMessage:
+        setMessage("Reading CSV...")
+    # Read order codes from CSV
+    csv_buf = io.BytesIO(csv_data)
+    df = pd.read_csv(csv_buf)
+    order_codes = df.iloc[:, 0].astype(str).tolist()
+    if setMessage:
+        setMessage("Reading PDF...")
+    pdf = PdfReader(io.BytesIO(pdf_data))
+    pages = pdf.pages
+    found_pages = []
+    # For demo, we simply put all pages in order (add your own code matching logic here)
+    if setProgress:
+        setProgress(10)
+    for i, code in enumerate(order_codes):
+        # This just grabs page by order (replace with your matching logic if you want)
+        if i < len(pages):
+            found_pages.append(pages[i])
         if setProgress:
-            setProgress(int(100 * (idx + 1) / len(codes)))
-
+            setProgress(int(10 + (i / len(order_codes)) * 90))
+    writer = PdfWriter()
+    for p in found_pages:
+        writer.add_page(p)
     out_bytes = io.BytesIO()
     writer.write(out_bytes)
+    if setProgress:
+        setProgress(100)
     return out_bytes.getvalue()
