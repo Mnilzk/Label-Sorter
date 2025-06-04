@@ -2,8 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Label Sorter (Runs in your browser, no server!)</title>
-  <link rel="stylesheet" href="style.css">
+  <title>Label Sorter (Barcode, Browser-only!)</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 40px; }
     h1 { color: #1983e6; }
@@ -12,86 +11,174 @@
   </style>
 </head>
 <body>
-  <h1>Label Sorter</h1>
+  <h1>Label Sorter (Barcode, Browser-only)</h1>
   <p>
-    Upload a PDF of shipping labels and a CSV order file.<br>
-    The pages will be reordered to match the order list, all on your device.
+    Upload your <b>PDF</b> of shipping labels and a <b>CSV</b> order file.<br>
+    The tool will extract barcodes from each page and reorder pages to match your CSV order, all in your browser.
   </p>
-  <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label>
-  <br><br>
-  <label>Order CSV: <input type="file" id="orderInput" accept=".csv"></label>
-  <br><br>
-  <button id="runBtn">Sort Labels</button>
-  <br>
-  <progress id="progressBar" value="0" max="100" style="display:none"></progress>
+  <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label><br><br>
+  <label>Order CSV: <input type="file" id="orderInput" accept=".csv"></label><br><br>
+  <button id="processBtn">Process</button>
+  <progress id="progressBar" value="0" max="100" style="width:70%;display:none"></progress>
   <div id="messages">Ready.</div>
-  <a id="downloadLink" style="display:none; margin-top:10px;">Download Sorted PDF</a>
+  <a id="downloadLink" style="display:none; margin-top:10px;">Download Reordered PDF</a>
 
-  <!-- pdf-lib for PDF manipulation -->
+  <!-- PDF.js for rendering PDF pages -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.min.js"></script>
+  <!-- pdf-lib for building PDFs -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
   <!-- PapaParse for CSV parsing -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-
+  <!-- QuaggaJS for barcode detection -->
+  <script src="https://unpkg.com/quagga@0.12.1/dist/quagga.min.js"></script>
   <script>
-    // Show progress
-    function setProgress(percent, msg) {
-      const bar = document.getElementById('progressBar');
-      bar.style.display = "";
-      bar.value = percent;
-      document.getElementById('messages').textContent = msg || '';
+    // Utility to read file as ArrayBuffer
+    function readFileAsArrayBuffer(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = e => resolve(e.target.result);
+        reader.onerror = reject;
+        reader.readAsArrayBuffer(file);
+      });
     }
 
-    document.getElementById('runBtn').onclick = async () => {
+    // Utility to parse CSV as array of codes
+    function parseCSV(file) {
+      return new Promise((resolve, reject) => {
+        Papa.parse(file, {
+          complete: results => {
+            // Take first column, trim, skip blanks
+            const codes = results.data.map(row => String(row[0]).trim()).filter(x => x && x !== "undefined");
+            resolve(codes);
+          },
+          error: reject
+        });
+      });
+    }
+
+    // Render PDF page to Canvas for barcode reading
+    async function renderPdfPageToCanvas(pdf, pageIndex) {
+      const page = await pdf.getPage(pageIndex + 1);
+      const viewport = page.getViewport({ scale: 2 });
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext('2d');
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      return canvas;
+    }
+
+    // Barcode scan: wraps QuaggaJS in a Promise for a given canvas
+    function scanBarcodeFromCanvas(canvas) {
+      return new Promise((resolve, reject) => {
+        // Convert canvas to DataURL
+        const dataUrl = canvas.toDataURL("image/png");
+        Quagga.decodeSingle({
+          src: dataUrl,
+          numOfWorkers: 0, // 0 for async in browser
+          inputStream: {
+            size: 800 // not critical
+          },
+          decoder: {
+            readers: [
+              "code_128_reader", "ean_reader", "ean_8_reader", "code_39_reader",
+              "code_39_vin_reader", "codabar_reader", "upc_reader", "upc_e_reader"
+            ]
+          },
+        }, function(result) {
+          if(result && result.codeResult) {
+            resolve(result.codeResult.code);
+          } else {
+            resolve(null);
+          }
+        });
+      });
+    }
+
+    // MAIN: Handle "Process"
+    document.getElementById('processBtn').onclick = async () => {
+      const messages = document.getElementById('messages');
+      const progressBar = document.getElementById('progressBar');
+      messages.textContent = "Starting...";
+      progressBar.style.display = "";
+      progressBar.value = 0;
+
       const pdfFile = document.getElementById('pdfInput').files[0];
-      const csvFile = document.getElementById('orderInput').files[0];
-      const downloadLink = document.getElementById("downloadLink");
-      if (!pdfFile || !csvFile) {
-        document.getElementById('messages').textContent = "Please select both files!";
+      const orderFile = document.getElementById('orderInput').files[0];
+      if (!pdfFile || !orderFile) {
+        messages.textContent = "Please select both files.";
         return;
       }
 
-      setProgress(0, "Reading CSV...");
-      // 1. Parse CSV
-      const csvText = await csvFile.text();
-      const parsed = Papa.parse(csvText.trim());
-      const orderCodes = parsed.data.map(row => row[0].trim()).filter(x => x);
-
-      setProgress(10, "Reading PDF...");
-      // 2. Read PDF
-      const arrayBuffer = await pdfFile.arrayBuffer();
-      const pdfDoc = await PDFLib.PDFDocument.load(arrayBuffer);
-
-      setProgress(20, "Matching order and reordering pages...");
-      // 3. Extract all pages and their text (brute force: just reorder pages)
-      const pageCount = pdfDoc.getPageCount();
-      const pages = [];
-      for (let i = 0; i < pageCount; i++) {
-        pages.push(pdfDoc.getPage(i));
+      // Parse CSV
+      messages.textContent = "Parsing CSV...";
+      const orderCodes = await parseCSV(orderFile);
+      if(orderCodes.length === 0) {
+        messages.textContent = "CSV appears empty!";
+        return;
       }
 
-      // For demo: reorder all pages in the original order of CSV (if orderCodes length matches pageCount)
-      // In reality: you would extract text/barcode from each page and match it to orderCodes
-      // But extracting barcode/text in-browser from PDF needs OCR or barcode lib, which is heavy for pure JS
-      // Here: just reorder by orderCodes if possible, else copy as is
+      // Load PDF
+      messages.textContent = "Loading PDF...";
+      const pdfBytes = await readFileAsArrayBuffer(pdfFile);
+      const pdfjsLib = window['pdfjs-dist/build/pdf'];
+      pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.worker.min.js";
+      const pdfDoc = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
 
-      // 4. Build new PDF with pages in CSV order (if possible)
-      const newPdfDoc = await PDFLib.PDFDocument.create();
-      for (let i = 0; i < orderCodes.length; i++) {
-        if (i < pageCount) {
-          const [copiedPage] = await newPdfDoc.copyPages(pdfDoc, [i]);
-          newPdfDoc.addPage(copiedPage);
+      // For creating new PDF
+      const PDFLib = window.PDFLib;
+      const outputPdf = await PDFLib.PDFDocument.create();
+
+      // Extract and scan barcodes
+      let barcodeToPageIdx = {};
+      let pageImgs = [];
+      let foundBarcodes = [];
+      for (let i = 0; i < pdfDoc.numPages; i++) {
+        messages.textContent = `Processing page ${i + 1} of ${pdfDoc.numPages}...`;
+        progressBar.value = Math.round((i/pdfDoc.numPages)*100);
+
+        const canvas = await renderPdfPageToCanvas(pdfDoc, i);
+        const code = await scanBarcodeFromCanvas(canvas);
+        foundBarcodes.push(code || "NO BARCODE FOUND");
+        if(code) barcodeToPageIdx[code] = i;
+        // Save canvas as PNG for re-assembly
+        pageImgs.push(canvas.toDataURL("image/png"));
+      }
+      progressBar.value = 100;
+
+      // Add pages to output PDF in CSV order
+      let anyPages = false;
+      for (let code of orderCodes) {
+        if (barcodeToPageIdx[code] !== undefined) {
+          const idx = barcodeToPageIdx[code];
+          const pngUrl = pageImgs[idx];
+          const page = await outputPdf.addPage();
+          const pngImage = await outputPdf.embedPng(pngUrl);
+          const { width, height } = pngImage.scale(1);
+          page.setSize(width, height);
+          page.drawImage(pngImage, { x: 0, y: 0, width, height });
+          anyPages = true;
         }
-        setProgress(20 + Math.floor(80 * (i / orderCodes.length)), `Reordering page ${i + 1}...`);
       }
 
-      // 5. Download new PDF
-      const newPdfBytes = await newPdfDoc.save();
-      const blob = new Blob([newPdfBytes], { type: "application/pdf" });
-      downloadLink.href = URL.createObjectURL(blob);
-      downloadLink.style.display = "";
-      downloadLink.textContent = "Download Sorted PDF";
-      downloadLink.download = "sorted_labels.pdf";
-      setProgress(100, "Done! Download your sorted PDF below.");
+      // Feedback/debug
+      let barcodeInfo = foundBarcodes.map((b, i) => `Page ${i+1}: ${b}`).join('\n');
+      messages.textContent = anyPages ?
+        `Done! Download your sorted PDF.\nDetected barcodes (per page):\n${barcodeInfo}` :
+        `No matching barcodes found. Check your files.`;
+
+      // Download link
+      if (anyPages) {
+        const outBytes = await outputPdf.save();
+        const blob = new Blob([outBytes], { type: "application/pdf" });
+        const link = document.getElementById("downloadLink");
+        link.href = URL.createObjectURL(blob);
+        link.style.display = "";
+        link.textContent = "Download Reordered PDF";
+      } else {
+        document.getElementById("downloadLink").style.display = "none";
+      }
+      progressBar.style.display = "none";
     };
   </script>
 </body>
