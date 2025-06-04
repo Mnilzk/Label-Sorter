@@ -4,31 +4,32 @@
   <meta charset="UTF-8">
   <title>Label Sorter (Browser-based, No Server)</title>
   <link rel="stylesheet" href="style.css">
+  <style>
+    body { font-family: sans-serif; max-width: 700px; margin: 2em auto; background: #f7f7f7; }
+    h1 { color: #2274a5; }
+    label, button { margin: 0.6em 0; display: block; }
+    #progress, #status { margin: 1em 0; font-weight: bold; }
+    #downloadLink { margin: 1em 0; display: inline-block; }
+  </style>
 </head>
 <body>
   <h1>Label Sorter (Browser-based)</h1>
   <p>
-    Upload your PDF of shipping labels and a CSV/XLSX with order codes.<br>
-    The tool will extract and reorder pages to match the order list, all on your device.
+    Upload your PDF of shipping labels and a CSV (or XLSX) with order codes.<br>
+    The tool will extract and reorder pages to match your order list – <b>all on your device, no upload</b>.
   </p>
-  <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label><br>
-  <label>Order CSV/XLSX: <input type="file" id="orderInput" accept=".csv, .xlsx"></label><br>
+  <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label>
+  <label>Order CSV/XLSX: <input type="file" id="csvInput" accept=".csv,.xlsx"></label>
   <button id="processBtn">Process</button>
-  <div id="progress"></div>
+  <div id="status"></div>
   <a id="downloadLink" style="display:none">Download Reordered PDF</a>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.min.js"></script>
+
+  <!-- Libraries -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
   <script src="main.js"></script>
 </body>
 </html>
-
-<!-- For PDF parsing/creating -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
-<!-- For PDF rendering (if needed for OCR) -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<!-- For OCR -->
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-<!-- For CSV -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
