@@ -1,38 +1,30 @@
+# main.py - for Pyodide (no pandas needed!)
 import io
 import csv
-from js import setProgress, setMessage
+from PyPDF2 import PdfReader, PdfWriter
 
-def sort_labels_browser(pdf_data, order_data, setProgress, setMessage):
-    import PyPDF2
-
-    setMessage("Reading CSV...")
-    # Read the CSV as a list of codes (first column)
+def sort_labels_browser(pdf_bytes, csv_bytes, setProgress=None, setMessage=None):
+    if setMessage: setMessage("Reading order from CSV...")
+    # Parse CSV order codes
     codes = []
-    reader = csv.reader(io.BytesIO(order_data))
-    for row in reader:
-        if row and row[0].strip():
-            codes.append(row[0].strip())
+    with io.StringIO(csv_bytes.tobytes().decode('utf-8')) as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if row and row[0].strip():
+                codes.append(row[0].strip())
 
-    setMessage("Reading PDF...")
-    pdf_reader = PyPDF2.PdfReader(io.BytesIO(pdf_data))
-    num_pages = len(pdf_reader.pages)
+    if setMessage: setMessage("Reading PDF...")
+    pdf = PdfReader(io.BytesIO(pdf_bytes))
+    writer = PdfWriter()
 
-    # For demo: assume code matches page text (you can customize logic)
-    page_map = {}
-    setMessage("Scanning PDF pages...")
-    for i, page in enumerate(pdf_reader.pages):
-        setProgress(int(100 * i / max(num_pages, 1)))
-        txt = page.extract_text() or ""
-        for code in codes:
-            if code in txt:
-                page_map[code] = i
-    setProgress(100)
+    if setMessage: setMessage("Sorting pages (no OCR, barcode, or matching, just as demo)...")
+    # This DEMO just adds all pages in original order (change to match logic)
+    for idx, code in enumerate(codes):
+        if idx < len(pdf.pages):
+            writer.add_page(pdf.pages[idx])
+        if setProgress:
+            setProgress(int(100 * (idx + 1) / len(codes)))
 
-    setMessage("Building output PDF...")
-    writer = PyPDF2.PdfWriter()
-    for code in codes:
-        if code in page_map:
-            writer.add_page(pdf_reader.pages[page_map[code]])
-    buf = io.BytesIO()
-    writer.write(buf)
-    return buf.getvalue()
+    out_bytes = io.BytesIO()
+    writer.write(out_bytes)
+    return out_bytes.getvalue()
