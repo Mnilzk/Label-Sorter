@@ -2,211 +2,104 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Label Sorter – Browser Python (Pyodide)</title>
-  <link rel="stylesheet" href="style.css" />
+  <title>Label Sorter (Runs in your browser, no server!)</title>
+  <link rel="stylesheet" href="style.css">
   <style>
-    body { font-family: Arial, sans-serif; max-width: 700px; margin: 40px auto; }
-    #progressBar { width: 100%; margin: 10px 0; }
-    #debug { font-size: 0.9em; background: #eee; padding: 10px; max-height: 200px; overflow:auto;}
+    body { font-family: Arial, sans-serif; margin: 40px; }
+    h1 { color: #1983e6; }
+    #progressBar { width: 70%; height: 18px; margin-top: 10px; }
+    #messages { color: #444; margin-top: 15px; }
   </style>
 </head>
 <body>
   <h1>Label Sorter (Runs in your browser, no server!)</h1>
-  <p>Upload a PDF of shipping labels and a CSV/XLSX order file.<br>
-     The pages will be reordered to match the order list on your device.<br>
-     <b>Note:</b> This runs pure Python in your browser using <a href="https://pyodide.org" target="_blank">Pyodide</a>.
+  <p>
+    Upload a PDF of shipping labels and a CSV/XLSX order file.<br>
+    The pages will be reordered to match the order list on your device.<br>
+    <b>Note:</b> This runs pure Python in your browser using <a href="https://pyodide.org/" target="_blank">Pyodide</a>.
   </p>
-  <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label><br>
-  <label>Order CSV/XLSX: <input type="file" id="csvInput" accept=".csv,.xlsx"></label><br>
-  <button id="sortBtn">Sort Labels</button>
+  <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label>
+  <br><br>
+  <label>Order CSV/XLSX: <input type="file" id="orderInput" accept=".csv,.xlsx"></label>
+  <br><br>
+  <button id="runBtn">Sort Labels</button>
+  <br>
   <progress id="progressBar" value="0" max="100" style="display:none"></progress>
-  <div id="status"></div>
-  <pre id="debug"></pre>
-  <a id="downloadLink" style="display:none; margin-top:15px;">Download Sorted PDF</a>
+  <div id="messages">Please wait, loading Python...</div>
+  <a id="downloadLink" style="display:none; margin-top:10px;">Download Sorted PDF</a>
 
-  <!-- Pyodide (Python in browser) -->
+  <!-- Pyodide CDN -->
   <script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
-  <!-- Tesseract.js for OCR/barcode (optional, browser fallback) -->
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-  <!-- XLSX (Excel in JS) -->
-  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
-
   <script>
     let pyodideReady = false;
     let pyodide = null;
+    let mainPyCode = null;
 
-    const progressBar = document.getElementById("progressBar");
-    const statusDiv = document.getElementById("status");
-    const debugPre = document.getElementById("debug");
-
-    // Load Pyodide
+    // Load Pyodide and Python code
     async function initPyodide() {
-      statusDiv.innerText = "Loading Python runtime (Pyodide)...";
+      document.getElementById("messages").textContent = "Please wait, loading Python runtime (Pyodide)...";
       pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/" });
-      await pyodide.loadPackage(['micropip', 'pandas', 'openpyxl', 'numpy']);
-      statusDiv.innerText = "Python runtime loaded!";
+      document.getElementById("messages").textContent = "Python loaded. Loading main logic...";
+      // Fetch main.py from your repo
+      mainPyCode = await fetch("main.py").then(resp => resp.text());
+      await pyodide.loadPackage(["micropip", "pandas", "openpyxl", "PyPDF2"]);
+      document.getElementById("messages").textContent = "Ready! Upload files and press 'Sort Labels'.";
       pyodideReady = true;
     }
+
     initPyodide();
 
-    // Helpers for reading files as Uint8Array/base64 for Pyodide
-    function fileToUint8Array(file) {
-      return new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = e => resolve(new Uint8Array(e.target.result));
-        reader.readAsArrayBuffer(file);
-      });
-    }
-
-    function logDebug(msg) {
-      debugPre.textContent += msg + '\n';
-      debugPre.scrollTop = debugPre.scrollHeight;
-    }
-
-    // OCR/Barcode extraction fallback via Tesseract.js (for browser only)
-    async function browserOCR(imgDataURL) {
-      statusDiv.innerText = "OCR (browser fallback)...";
-      logDebug("Tesseract OCR fallback running...");
-      const result = await Tesseract.recognize(imgDataURL, 'eng');
-      logDebug("Tesseract result: " + result.data.text);
-      return result.data.text;
-    }
-
-    document.getElementById("sortBtn").onclick = async function() {
-      debugPre.textContent = ""; // Clear debug
-      if (!pyodideReady) { statusDiv.textContent = "Please wait, loading Python..."; return; }
-      statusDiv.textContent = "";
-
-      const pdfFile = document.getElementById("pdfInput").files[0];
-      const csvFile = document.getElementById("csvInput").files[0];
-      if (!pdfFile || !csvFile) {
-        statusDiv.innerHTML = "Please upload BOTH PDF and CSV/XLSX!";
+    // Handle the button click
+    document.getElementById('runBtn').onclick = async () => {
+      if (!pyodideReady) {
+        document.getElementById("messages").textContent = "Python still loading, please wait...";
         return;
       }
-
-      // Read file data
-      statusDiv.innerText = "Reading input files...";
-      progressBar.style.display = "block";
-      progressBar.value = 0;
-
-      const pdfBytes = await fileToUint8Array(pdfFile);
-      let csvBytes = await fileToUint8Array(csvFile);
-      let csvName = csvFile.name;
-
-      // Mount files to Pyodide FS
-      pyodide.FS.writeFile("/input.pdf", pdfBytes);
-      pyodide.FS.writeFile("/input." + csvName.split('.').pop(), csvBytes);
-
-      // Debug info
-      logDebug("Files written to Python FS.");
-
-      // Compose the Python logic (inline for simplicity, see below)
-      const pythonScript = `
-import sys
-import pandas as pd
-from pathlib import Path
-
-status_lines = []
-def set_status(msg):
-    status_lines.append(str(msg))
-
-set_status("Reading order file...")
-csv_path = [x for x in Path('/').glob('input.*') if x.suffix in ['.csv','.xlsx']]
-if csv_path[0].suffix == '.csv':
-    df = pd.read_csv(csv_path[0])
-else:
-    df = pd.read_excel(csv_path[0])
-codes = [str(x).strip() for x in df.iloc[:,0] if str(x).strip() and str(x).strip().lower() != 'nan']
-
-set_status("Order codes: " + str(codes[:5]) + ("..." if len(codes)>5 else ""))
-
-set_status("Reading PDF...")
-from PyPDF2 import PdfReader, PdfWriter
-reader = PdfReader("/input.pdf")
-writer = PdfWriter()
-
-# Extract page text with fallback to OCR (if available)
-def page_text(page):
-    try:
-        return page.extract_text() or ""
-    except Exception:
-        return ""
-
-pages_by_code = {}
-# Try to match codes by searching for code in text
-for idx, page in enumerate(reader.pages):
-    text = page_text(page)
-    for code in codes:
-        if code in text:
-            pages_by_code[code] = idx
-    set_status(f"Page {idx+1}/{len(reader.pages)} scanned.")
-
-# Optional: Fallback to OCR via JS/Tesseract if missing matches
-missing_codes = [code for code in codes if code not in pages_by_code]
-set_status("Missing codes: " + str(missing_codes[:5]) + ("..." if len(missing_codes)>5 else ""))
-
-# Compose ordered PDF
-ordered_pages = []
-for code in codes:
-    if code in pages_by_code:
-        ordered_pages.append(reader.pages[pages_by_code[code]])
-    else:
-        # Fallback: include blank or the original (could try OCR here)
-        from PyPDF2.generic import RectangleObject
-        from PyPDF2 import PageObject
-        blank = PageObject.create_blank_page(width=612, height=792)
-        ordered_pages.append(blank)
-        set_status(f"WARNING: Code {code} not found, adding blank page.")
-
-for p in ordered_pages:
-    writer.add_page(p)
-
-with open("/sorted_labels.pdf", "wb") as out:
-    writer.write(out)
-
-set_status("Done! Sorted PDF ready.")
-
-status_lines
-`;
-
-      statusDiv.textContent = "Processing PDF in Python (browser)...";
-      progressBar.value = 40;
-
-      // Run Python in browser (Pyodide)
-      let status_lines;
-      try {
-        status_lines = await pyodide.runPythonAsync(pythonScript);
-      } catch (e) {
-        statusDiv.textContent = "Python error: " + e;
-        logDebug("Python error: " + e);
+      let pdfFile = document.getElementById('pdfInput').files[0];
+      let orderFile = document.getElementById('orderInput').files[0];
+      if (!pdfFile || !orderFile) {
+        document.getElementById("messages").textContent = "Please select both files!";
         return;
       }
-      progressBar.value = 90;
+      // Read files as ArrayBuffer and send to Python
+      const readAsArrayBuffer = file => new Promise(res => { let r = new FileReader(); r.onload = e => res(new Uint8Array(e.target.result)); r.readAsArrayBuffer(file); });
+      const pdfBuf = await readAsArrayBuffer(pdfFile);
+      const orderBuf = await readAsArrayBuffer(orderFile);
 
-      // Show progress/debug
-      if (status_lines && status_lines.toJs) {
-        status_lines = status_lines.toJs();
+      // Expose progress update from Python
+      window.setProgress = pct => {
+        let bar = document.getElementById("progressBar");
+        bar.style.display = "";
+        bar.value = pct;
       }
-      if (status_lines) {
-        statusDiv.textContent = status_lines[status_lines.length-1] || "Processing complete.";
-        debugPre.textContent += status_lines.join("\n");
-      }
+      window.setMessage = msg => { document.getElementById("messages").textContent = msg; }
 
-      // Download the sorted PDF
+      // Register Python helpers
+      pyodide.globals.set("pdf_data", pdfBuf);
+      pyodide.globals.set("order_data", orderBuf);
+
+      // Now run your main logic (see below for main.py)
+      document.getElementById("messages").textContent = "Running Python, sorting labels...";
+      document.getElementById("progressBar").style.display = "";
+      document.getElementById("progressBar").value = 0;
+
       try {
-        const outData = pyodide.FS.readFile("/sorted_labels.pdf");
-        const blob = new Blob([outData], {type: "application/pdf"});
-        const downloadLink = document.getElementById("downloadLink");
-        downloadLink.href = URL.createObjectURL(blob);
-        downloadLink.download = "sorted_labels.pdf";
-        downloadLink.style.display = "";
-      } catch (e) {
-        statusDiv.textContent = "Error: Could not retrieve output PDF.";
-        logDebug(e.toString());
+        await pyodide.runPythonAsync(mainPyCode + `
+result_bytes = sort_labels_browser(pdf_data, order_data, setProgress, setMessage)
+        `);
+        let resultBytes = pyodide.globals.get('result_bytes').toJs();
+        let blob = new Blob([resultBytes], {type: "application/pdf"});
+        let url = URL.createObjectURL(blob);
+        let link = document.getElementById("downloadLink");
+        link.href = url;
+        link.style.display = "";
+        link.textContent = "Download Sorted PDF";
+        document.getElementById("messages").textContent = "Done! Download your sorted PDF.";
+      } catch (err) {
+        document.getElementById("messages").textContent = "Python error: " + err;
       }
-      progressBar.value = 100;
-      setTimeout(()=>progressBar.style.display='none', 800);
-    };
+      document.getElementById("progressBar").style.display = "none";
+    }
   </script>
 </body>
 </html>
