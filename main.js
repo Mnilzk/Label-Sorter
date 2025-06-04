@@ -17,7 +17,6 @@ function parseOrderFile(file) {
         if (file.name.endsWith(".csv")) {
             Papa.parse(file, {
                 complete: (results) => {
-                    // Get all codes from first column
                     const codes = results.data.map(row => String(row[0]).trim()).filter(x => x && x !== "undefined");
                     resolve(codes);
                 }
@@ -59,19 +58,27 @@ async function ocrImage(canvas) {
 document.getElementById('processBtn').onclick = async () => {
     const pdfFile = document.getElementById('pdfInput').files[0];
     const orderFile = document.getElementById('orderInput').files[0];
+    const progressBar = document.getElementById('progressBar');
     if (!pdfFile || !orderFile) {
         alert("Please upload both PDF and CSV/XLSX files!");
         return;
     }
     document.getElementById('progress').textContent = "Parsing order file...";
+    progressBar.style.display = "none";
+    progressBar.value = 0;
+
     const orderCodes = await parseOrderFile(orderFile);
 
     document.getElementById('progress').textContent = "Loading PDF...";
-    // Load PDF for extraction
     const pdfBytes = await readFileAsArrayBuffer(pdfFile);
     const pdfjsLib = window['pdfjs-dist/build/pdf'];
     pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.worker.min.js";
     const pdfDoc = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
+
+    // Set up the progress bar
+    progressBar.max = pdfDoc.numPages;
+    progressBar.value = 0;
+    progressBar.style.display = "";
 
     // For creating new PDF
     const PDFLib = window.PDFLib;
@@ -80,9 +87,10 @@ document.getElementById('processBtn').onclick = async () => {
     let codeToPageIdx = {};
     let pageImgs = [];
 
-    // OCR each page
+    // OCR each page, update progress
     for (let i = 0; i < pdfDoc.numPages; i++) {
         document.getElementById('progress').textContent = `Processing page ${i + 1}/${pdfDoc.numPages}...`;
+        progressBar.value = i;
         const canvas = await renderPdfPageToImage(pdfDoc, i);
         const ocrText = await ocrImage(canvas);
 
@@ -96,6 +104,7 @@ document.getElementById('processBtn').onclick = async () => {
         // Save canvas as PNG for PDF creation
         pageImgs.push(canvas.toDataURL("image/png"));
     }
+    progressBar.value = pdfDoc.numPages;
 
     // Add matched pages to output PDF in order
     for (let code of orderCodes) {
@@ -119,4 +128,5 @@ document.getElementById('processBtn').onclick = async () => {
     link.textContent = "Download Reordered PDF";
 
     document.getElementById('progress').textContent = "Done!";
+    progressBar.style.display = "none";
 };
