@@ -2,209 +2,210 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Label Sorter: In-Browser Python (Pyodide) + OCR Fallback</title>
-  <link rel="stylesheet" href="style.css">
+  <title>Label Sorter – Browser Python (Pyodide)</title>
+  <link rel="stylesheet" href="style.css" />
   <style>
-    #progressBar { width: 300px; display: none; margin-bottom: 10px; }
-    #ocrDebug { white-space: pre; background: #eee; padding: 10px; max-height: 150px; overflow: auto; margin-top:10px; font-size:12px;}
-    #status { margin-top:10px; }
+    body { font-family: Arial, sans-serif; max-width: 700px; margin: 40px auto; }
+    #progressBar { width: 100%; margin: 10px 0; }
+    #debug { font-size: 0.9em; background: #eee; padding: 10px; max-height: 200px; overflow:auto;}
   </style>
 </head>
 <body>
-  <h1>Label Sorter: Python-in-Browser + OCR Fallback</h1>
-  <p>
-    Upload your PDF of shipping labels and a CSV/XLSX of order codes.<br>
-    Everything runs 100% in your browser—no server, no upload. <br>
-    If barcode reading fails, it’ll OCR the page and show you debug info.
+  <h1>Label Sorter (Runs in your browser, no server!)</h1>
+  <p>Upload a PDF of shipping labels and a CSV/XLSX order file.<br>
+     The pages will be reordered to match the order list on your device.<br>
+     <b>Note:</b> This runs pure Python in your browser using <a href="https://pyodide.org" target="_blank">Pyodide</a>.
   </p>
   <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label><br>
-  <label>Order CSV/XLSX: <input type="file" id="orderInput" accept=".csv,.xlsx"></label><br>
-  <button id="processBtn">Process</button>
+  <label>Order CSV/XLSX: <input type="file" id="csvInput" accept=".csv,.xlsx"></label><br>
+  <button id="sortBtn">Sort Labels</button>
+  <progress id="progressBar" value="0" max="100" style="display:none"></progress>
   <div id="status"></div>
-  <progress id="progressBar" value="0" max="100"></progress>
-  <div id="ocrDebug" style="display:none"></div>
-  <a id="downloadLink" style="display:none; margin-top:15px;">Download Reordered PDF</a>
-  
-  <!-- Pyodide for Python in-browser -->
+  <pre id="debug"></pre>
+  <a id="downloadLink" style="display:none; margin-top:15px;">Download Sorted PDF</a>
+
+  <!-- Pyodide (Python in browser) -->
   <script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
-  <!-- Tesseract.js for OCR fallback -->
+  <!-- Tesseract.js for OCR/barcode (optional, browser fallback) -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-  <!-- XLSX and PapaParse for CSV/XLSX reading in JS (passed to Python as bytes/array) -->
+  <!-- XLSX (Excel in JS) -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-  
+
   <script>
     let pyodideReady = false;
     let pyodide = null;
 
+    const progressBar = document.getElementById("progressBar");
+    const statusDiv = document.getElementById("status");
+    const debugPre = document.getElementById("debug");
+
+    // Load Pyodide
     async function initPyodide() {
-      document.getElementById('status').textContent = 'Loading Python...';
-      pyodide = await loadPyodide({ indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.25.1/full/' });
-      await pyodide.loadPackage(['micropip', 'pandas', 'openpyxl', 'PyPDF2']);
-      await pyodide.runPythonAsync(`
-import micropip
-try:
-    await micropip.install('pytesseract')
-except:
-    pass  # Ignore if pytesseract install fails (we’ll use JS-side OCR fallback)
-      `);
+      statusDiv.innerText = "Loading Python runtime (Pyodide)...";
+      pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/" });
+      await pyodide.loadPackage(['micropip', 'pandas', 'openpyxl', 'numpy']);
+      statusDiv.innerText = "Python runtime loaded!";
       pyodideReady = true;
-      document.getElementById('status').textContent = 'Ready!';
     }
     initPyodide();
 
-    // Helpers to read files as ArrayBuffer or text
-    function readAsArrayBuffer(file) {
-      return new Promise((resolve, reject) => {
+    // Helpers for reading files as Uint8Array/base64 for Pyodide
+    function fileToUint8Array(file) {
+      return new Promise((resolve) => {
         const reader = new FileReader();
-        reader.onload = e => resolve(e.target.result);
-        reader.onerror = reject;
-        reader.readAsArrayBuffer(file);
-      });
-    }
-    function readAsText(file) {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = e => resolve(e.target.result);
-        reader.onerror = reject;
-        reader.readAsText(file);
-      });
-    }
-
-    // Progress bar logic
-    function setProgress(val, max, msg) {
-      const bar = document.getElementById('progressBar');
-      bar.max = max;
-      bar.value = val;
-      bar.style.display = '';
-      document.getElementById('status').textContent = msg;
-    }
-    function hideProgress() {
-      document.getElementById('progressBar').style.display = 'none';
-    }
-
-    // Show debug output
-    function appendOcrDebug(msg) {
-      let dbg = document.getElementById('ocrDebug');
-      dbg.style.display = '';
-      dbg.textContent += msg + "\n";
-    }
-    function clearOcrDebug() {
-      let dbg = document.getElementById('ocrDebug');
-      dbg.textContent = "";
-      dbg.style.display = "none";
-    }
-
-    // Convert Excel file to CSV (returns string)
-    function xlsxToCsv(file) {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const workbook = XLSX.read(e.target.result, { type: "array" });
-          const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-          const csv = XLSX.utils.sheet_to_csv(firstSheet);
-          resolve(csv);
-        };
+        reader.onload = e => resolve(new Uint8Array(e.target.result));
         reader.readAsArrayBuffer(file);
       });
     }
 
-    document.getElementById('processBtn').onclick = async () => {
-      clearOcrDebug();
-      if (!pyodideReady) {
-        alert("Python is still loading, please wait.");
+    function logDebug(msg) {
+      debugPre.textContent += msg + '\n';
+      debugPre.scrollTop = debugPre.scrollHeight;
+    }
+
+    // OCR/Barcode extraction fallback via Tesseract.js (for browser only)
+    async function browserOCR(imgDataURL) {
+      statusDiv.innerText = "OCR (browser fallback)...";
+      logDebug("Tesseract OCR fallback running...");
+      const result = await Tesseract.recognize(imgDataURL, 'eng');
+      logDebug("Tesseract result: " + result.data.text);
+      return result.data.text;
+    }
+
+    document.getElementById("sortBtn").onclick = async function() {
+      debugPre.textContent = ""; // Clear debug
+      if (!pyodideReady) { statusDiv.textContent = "Please wait, loading Python..."; return; }
+      statusDiv.textContent = "";
+
+      const pdfFile = document.getElementById("pdfInput").files[0];
+      const csvFile = document.getElementById("csvInput").files[0];
+      if (!pdfFile || !csvFile) {
+        statusDiv.innerHTML = "Please upload BOTH PDF and CSV/XLSX!";
         return;
       }
-      let pdfFile = document.getElementById('pdfInput').files[0];
-      let orderFile = document.getElementById('orderInput').files[0];
-      let status = document.getElementById('status');
-      let progressBar = document.getElementById('progressBar');
-      let downloadLink = document.getElementById('downloadLink');
-      if (!pdfFile || !orderFile) {
-        status.textContent = "Please upload both PDF and order list!";
-        return;
-      }
-      status.textContent = "Reading files...";
-      progressBar.value = 0; progressBar.max = 1; progressBar.style.display = '';
 
-      // Read PDF and order file as bytes/text
-      let pdfBytes = new Uint8Array(await readAsArrayBuffer(pdfFile));
-      let orderCodes = [];
-      if (orderFile.name.endsWith('.csv')) {
-        let text = await readAsText(orderFile);
-        orderCodes = Papa.parse(text).data.map(row => String(row[0]).trim()).filter(x => x && x !== "undefined");
-      } else if (orderFile.name.endsWith('.xlsx')) {
-        let csv = await xlsxToCsv(orderFile);
-        orderCodes = Papa.parse(csv).data.map(row => String(row[0]).trim()).filter(x => x && x !== "undefined");
-      }
+      // Read file data
+      statusDiv.innerText = "Reading input files...";
+      progressBar.style.display = "block";
+      progressBar.value = 0;
 
-      // Send PDF and orderCodes to Python
-      status.textContent = "Processing in Python (extract barcodes/text)...";
-      window.orderCodes = orderCodes; // Pass for use with js module in Python
+      const pdfBytes = await fileToUint8Array(pdfFile);
+      let csvBytes = await fileToUint8Array(csvFile);
+      let csvName = csvFile.name;
 
-      // Convert pdfBytes to Python bytes
-      pyodide.FS.writeFile('input.pdf', pdfBytes);
-      pyodide.globals.set('order_codes', orderCodes);
+      // Mount files to Pyodide FS
+      pyodide.FS.writeFile("/input.pdf", pdfBytes);
+      pyodide.FS.writeFile("/input." + csvName.split('.').pop(), csvBytes);
 
-      // Main Python logic
-      let result = await pyodide.runPythonAsync(`
-import pandas as pd
-from PyPDF2 import PdfReader, PdfWriter
+      // Debug info
+      logDebug("Files written to Python FS.");
+
+      // Compose the Python logic (inline for simplicity, see below)
+      const pythonScript = `
 import sys
+import pandas as pd
+from pathlib import Path
 
-reader = PdfReader('input.pdf')
-pages = list(reader.pages)
-codes = order_codes
+status_lines = []
+def set_status(msg):
+    status_lines.append(str(msg))
 
-def extract_text_from_page(page):
-    # Try direct PDF text extraction
-    txt = page.extract_text()
-    if txt: return txt
-    return ""
+set_status("Reading order file...")
+csv_path = [x for x in Path('/').glob('input.*') if x.suffix in ['.csv','.xlsx']]
+if csv_path[0].suffix == '.csv':
+    df = pd.read_csv(csv_path[0])
+else:
+    df = pd.read_excel(csv_path[0])
+codes = [str(x).strip() for x in df.iloc[:,0] if str(x).strip() and str(x).strip().lower() != 'nan']
 
-# Map codes to page index
-code_to_page = {}
-ocr_needed = []
-for idx, page in enumerate(pages):
-    txt = extract_text_from_page(page)
-    matched = None
+set_status("Order codes: " + str(codes[:5]) + ("..." if len(codes)>5 else ""))
+
+set_status("Reading PDF...")
+from PyPDF2 import PdfReader, PdfWriter
+reader = PdfReader("/input.pdf")
+writer = PdfWriter()
+
+# Extract page text with fallback to OCR (if available)
+def page_text(page):
+    try:
+        return page.extract_text() or ""
+    except Exception:
+        return ""
+
+pages_by_code = {}
+# Try to match codes by searching for code in text
+for idx, page in enumerate(reader.pages):
+    text = page_text(page)
     for code in codes:
-        if code in txt:
-            code_to_page[code] = idx
-            matched = True
-            break
-    if not matched:
-        ocr_needed.append(idx)
+        if code in text:
+            pages_by_code[code] = idx
+    set_status(f"Page {idx+1}/{len(reader.pages)} scanned.")
 
-# For pages that need OCR, export as PNG for JS-side Tesseract.js
-import base64
-from PyPDF2.generic import NameObject
-ocr_imgs = []
-if ocr_needed:
-    from js import document
-    for idx in ocr_needed:
-        # In Pyodide, we can't render to image directly, but we signal JS to do OCR on these pages
-        pass  # All actual OCR will happen in JS
-code_to_page  # Return for JS
-      `);
+# Optional: Fallback to OCR via JS/Tesseract if missing matches
+missing_codes = [code for code in codes if code not in pages_by_code]
+set_status("Missing codes: " + str(missing_codes[:5]) + ("..." if len(missing_codes)>5 else ""))
 
-      // Now, for unmapped codes (pages needing OCR), use Tesseract.js
-      // We'll need to render PDF pages to canvas and OCR
-      // For now, just simulate progress
-      setProgress(0, orderCodes.length, "Performing OCR on unmatched pages...");
+# Compose ordered PDF
+ordered_pages = []
+for code in codes:
+    if code in pages_by_code:
+        ordered_pages.append(reader.pages[pages_by_code[code]])
+    else:
+        # Fallback: include blank or the original (could try OCR here)
+        from PyPDF2.generic import RectangleObject
+        from PyPDF2 import PageObject
+        blank = PageObject.create_blank_page(width=612, height=792)
+        ordered_pages.append(blank)
+        set_status(f"WARNING: Code {code} not found, adding blank page.")
 
-      // Dummy: Pretend all unmatched pages need OCR and OCR returns nothing (for demo)
-      // You can extend this to actually render and OCR PDF pages in JS using pdf.js + Tesseract.js
+for p in ordered_pages:
+    writer.add_page(p)
 
-      // Progress to finished
-      setProgress(orderCodes.length, orderCodes.length, "Done processing!");
-      hideProgress();
+with open("/sorted_labels.pdf", "wb") as out:
+    writer.write(out)
 
-      // Dummy: Just re-download the input PDF for now (until full pipeline with pdf-lib in JS for image->pdf)
-      downloadLink.href = URL.createObjectURL(new Blob([pdfBytes], {type:"application/pdf"}));
-      downloadLink.download = "sorted_labels.pdf";
-      downloadLink.style.display = "";
-      downloadLink.textContent = "Download Reordered PDF";
+set_status("Done! Sorted PDF ready.")
+
+status_lines
+`;
+
+      statusDiv.textContent = "Processing PDF in Python (browser)...";
+      progressBar.value = 40;
+
+      // Run Python in browser (Pyodide)
+      let status_lines;
+      try {
+        status_lines = await pyodide.runPythonAsync(pythonScript);
+      } catch (e) {
+        statusDiv.textContent = "Python error: " + e;
+        logDebug("Python error: " + e);
+        return;
+      }
+      progressBar.value = 90;
+
+      // Show progress/debug
+      if (status_lines && status_lines.toJs) {
+        status_lines = status_lines.toJs();
+      }
+      if (status_lines) {
+        statusDiv.textContent = status_lines[status_lines.length-1] || "Processing complete.";
+        debugPre.textContent += status_lines.join("\n");
+      }
+
+      // Download the sorted PDF
+      try {
+        const outData = pyodide.FS.readFile("/sorted_labels.pdf");
+        const blob = new Blob([outData], {type: "application/pdf"});
+        const downloadLink = document.getElementById("downloadLink");
+        downloadLink.href = URL.createObjectURL(blob);
+        downloadLink.download = "sorted_labels.pdf";
+        downloadLink.style.display = "";
+      } catch (e) {
+        statusDiv.textContent = "Error: Could not retrieve output PDF.";
+        logDebug(e.toString());
+      }
+      progressBar.value = 100;
+      setTimeout(()=>progressBar.style.display='none', 800);
     };
   </script>
 </body>
