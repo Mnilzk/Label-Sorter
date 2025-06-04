@@ -1,46 +1,47 @@
 import js
-from pyodide.ffi import to_js
 import pandas as pd
-import fitz  # PyMuPDF
+import io
 
-def process_files(pdf_bytes, order_bytes, order_filename):
-    # Read order list
-    if order_filename.endswith('.csv'):
-        from io import StringIO
-        df_orders = pd.read_csv(StringIO(order_bytes.decode("utf-8")))
-    elif order_filename.endswith('.xlsx'):
-        from io import BytesIO
-        df_orders = pd.read_excel(BytesIO(order_bytes))
+def handle_sort_labels(event=None):
+    # Get PDF bytes and order file bytes from JS global variables
+    pdf_bytes = js.window.pdfBytes.to_py()
+    order_bytes = js.window.orderBytes.to_py()
+    order_name = js.window.orderFileName
+
+    # Load order codes
+    if order_name.endswith('.csv'):
+        order_df = pd.read_csv(io.BytesIO(order_bytes))
+    elif order_name.endswith('.xlsx'):
+        order_df = pd.read_excel(io.BytesIO(order_bytes))
     else:
-        js.console.log("Unknown order file type")
-        return None
+        js.window.showStatus("Unsupported order file type!", "error")
+        return
 
-    order_codes = df_orders.iloc[:, 0].astype(str).tolist()
-    
-    # Open PDF
-    pdf = fitz.open(stream=pdf_bytes, filetype="pdf")
-    code_to_page = {}
+    # Get first column as codes (make sure they're strings)
+    order_codes = [str(code).strip() for code in order_df.iloc[:, 0] if str(code).strip() and str(code).lower() != "nan"]
+    js.window.showStatus(f"Loaded {len(order_codes)} codes from order list.", "progress")
 
-    # Very basic: look for code as raw text on each page (not barcode/OCR yet)
-    for i, page in enumerate(pdf):
-        text = page.get_text()
+    # Use JS PDF.js and Tesseract to OCR/extract codes from each PDF page
+    page_codes = js.window.extractPdfCodes().to_py()  # Returns array of OCRd strings per page
+
+    # Map: code in page -> page idx
+    code_to_page_idx = {}
+    for idx, text in enumerate(page_codes):
         for code in order_codes:
             if code in text:
-                code_to_page[code] = i
+                code_to_page_idx[code] = idx
+                break
 
-    # Reorder pages
-    out_pdf = fitz.open()
-    for code in order_codes:
-        page_num = code_to_page.get(code)
-        if page_num is not None:
-            out_pdf.insert_pdf(pdf, from_page=page_num, to_page=page_num)
-    out_bytes = out_pdf.write()
-    return out_bytes
+    js.window.showStatus("Matched codes to PDF pages, reordering...", "progress")
 
-def handle_files(pdf_bytes, order_bytes, order_filename):
-    # This function is called by JS after files are uploaded
-    out_bytes = process_files(pdf_bytes, order_bytes, order_filename)
-    if out_bytes:
-        js.send_result(to_js(out_bytes))
-    else:
-        js.send_result(None)
+    # Compose new PDF: call JS helper to reorder PDF using the page indexes
+    sorted_pages = [code_to_page_idx[code] for code in order_codes if code in code_to_page_idx]
+    if not sorted_pages:
+        js.window.showStatus("No codes matched! Check if codes are visible in the labels.", "error")
+        return
+
+    # Call JS helper to generate new PDF, get bytes back
+    new_pdf_bytes = js.window.makeSortedPdf(sorted_pages)
+    js.window.triggerDownload(new_pdf_bytes, "sorted_labels.pdf")
+
+    js.window.showStatus(f"Done! {len(sorted_pages)} labels sorted and ready to download.", "success")
