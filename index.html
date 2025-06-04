@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Label Sorter (Browser, CSV only)</title>
+  <title>Label Sorter (CSV only, pure Python in browser)</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 40px; }
     h1 { color: #1983e6; }
@@ -11,35 +11,41 @@
   </style>
 </head>
 <body>
-  <h1>Label Sorter</h1>
+  <h1>Label Sorter (CSV only)</h1>
   <p>
-    <b>Upload a PDF of shipping labels and a CSV order file.</b><br>
-    The pages will be reordered to match the order list on your device.<br>
-    <b>Note:</b> Only CSV files supported (no Excel). Everything runs in your browser!
+    Upload a PDF of shipping labels and a CSV order file.<br>
+    The PDF pages will be reordered to match the order list, all in your browser.<br>
+    <b>No Excel support in this version.</b>
   </p>
-  <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label><br><br>
-  <label>Order CSV: <input type="file" id="orderInput" accept=".csv"></label><br><br>
-  <button id="runBtn">Sort Labels</button><br>
+  <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label>
+  <br><br>
+  <label>Order CSV: <input type="file" id="orderInput" accept=".csv"></label>
+  <br><br>
+  <button id="runBtn">Sort Labels</button>
+  <br>
   <progress id="progressBar" value="0" max="100" style="display:none"></progress>
-  <div id="messages">Loading Python...</div>
+  <div id="messages">Please wait, loading Python (Pyodide)...</div>
   <a id="downloadLink" style="display:none; margin-top:10px;">Download Sorted PDF</a>
 
   <!-- Pyodide CDN -->
-  <script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
   <script>
     let pyodideReady = false;
     let pyodide = null;
     let mainPyCode = null;
 
+    // Load Pyodide and Python code
     async function initPyodide() {
-      document.getElementById("messages").textContent = "Loading Python runtime (Pyodide)...";
-      pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/" });
+      document.getElementById("messages").textContent = "Loading Python (Pyodide)...";
+      pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.0/full/" });
       document.getElementById("messages").textContent = "Loaded Python. Downloading logic...";
+      // Fetch main.py from your repo (or same folder)
       mainPyCode = await fetch("main.py").then(resp => resp.text());
-      await pyodide.loadPackage(["micropip", "pandas", "PyPDF2"]);
+      await pyodide.loadPackage(["pandas", "PyPDF2"]);
       document.getElementById("messages").textContent = "Ready! Upload files and press 'Sort Labels'.";
       pyodideReady = true;
     }
+
     initPyodide();
 
     document.getElementById('runBtn').onclick = async () => {
@@ -53,20 +59,21 @@
         document.getElementById("messages").textContent = "Please select both files!";
         return;
       }
-      // Read files as ArrayBuffer and send to Python
+
+      // Read files as Uint8Array for Pyodide
       const readAsArrayBuffer = file => new Promise(res => { let r = new FileReader(); r.onload = e => res(new Uint8Array(e.target.result)); r.readAsArrayBuffer(file); });
       const pdfBuf = await readAsArrayBuffer(pdfFile);
       const orderBuf = await readAsArrayBuffer(orderFile);
 
-      // Expose progress update from Python
+      // Progress helpers
+      window.setMessage = msg => { document.getElementById("messages").textContent = msg; }
       window.setProgress = pct => {
         let bar = document.getElementById("progressBar");
         bar.style.display = "";
         bar.value = pct;
       }
-      window.setMessage = msg => { document.getElementById("messages").textContent = msg; }
 
-      // Register Python helpers
+      // Register Python globals
       pyodide.globals.set("pdf_data", pdfBuf);
       pyodide.globals.set("order_data", orderBuf);
 
@@ -76,7 +83,7 @@
 
       try {
         await pyodide.runPythonAsync(mainPyCode + `
-result_bytes = sort_labels_browser(pdf_data, order_data, setProgress, setMessage)
+result_bytes = sort_labels_csv_only(pdf_data, order_data, setProgress, setMessage)
         `);
         let resultBytes = pyodide.globals.get('result_bytes').toJs();
         let blob = new Blob([resultBytes], {type: "application/pdf"});
