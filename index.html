@@ -2,197 +2,94 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Label Sorter (Browser-based, No Server)</title>
-  <link rel="stylesheet" href="style.css">
-  <style>
-    #progressBar { width: 300px; display: none; margin-bottom:10px; }
-    #downloadLink { display:none; margin-top:15px; }
-  </style>
+  <title>Label Sorter (Pyodide Version)</title>
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
 </head>
 <body>
-  <h1>Label Sorter (Browser-based)</h1>
-  <p>
-    Upload your PDF of shipping labels and a CSV or XLSX with order codes.<br>
-    The tool will extract and reorder pages to match the order list, all on your device.
-  </p>
+  <h2>Label Sorter (All in browser!)</h2>
+  <p>Upload your PDF and CSV/XLSX. The Python code will run in your browser using Pyodide.</p>
   <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label><br>
   <label>Order CSV/XLSX: <input type="file" id="orderInput" accept=".csv,.xlsx"></label><br>
   <button id="processBtn">Process</button>
-  <div id="progress" style="margin-top:10px;"></div>
-  <progress id="progressBar" value="0" max="100"></progress>
-  <a id="downloadLink">Download Reordered PDF</a>
+  <div id="status"></div>
+  <a id="downloadLink" style="display:none">Download Reordered PDF</a>
 
-  <!-- PDF.js for reading PDF (latest, official CDN) -->
-  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.2.67/build/pdf.min.js"></script>
-  <!-- PDF-lib for creating PDFs -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
-  <!-- PapaParse for CSV parsing -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-  <!-- XLSX.js for reading Excel files -->
-  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
-  <!-- Tesseract.js for OCR -->
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-  <script>
-    // Wait for all libraries to load
-    window.addEventListener('DOMContentLoaded', function () {
-      // Check PDF.js loaded
-      if (!window.pdfjsLib || !window.pdfjsLib.getDocument) {
-        document.getElementById('progress').innerText =
-          "PDF.js did not load. Please refresh or check your CDN scripts!";
+  <script type="text/javascript">
+    let pyodideReadyPromise = loadPyodide({ indexURL : "https://cdn.jsdelivr.net/pyodide/v0.25.0/full/" });
+
+    async function runPythonReorder(pdfBytes, csvBytes, csvName) {
+      const pyodide = await pyodideReadyPromise;
+      // Install packages if needed (e.g., pandas, pypdf)
+      await pyodide.loadPackage(['micropip']);
+      await pyodide.runPythonAsync(`
+import micropip
+await micropip.install(['pypdf', 'pandas'])
+`);
+      // Python code will run here
+      // Pass the data from JS using js module
+      pyodide.globals.set('pdf_bytes', pdfBytes);
+      pyodide.globals.set('csv_bytes', csvBytes);
+      pyodide.globals.set('csv_name', csvName);
+
+      await pyodide.runPythonAsync(`
+import pandas as pd
+from pypdf import PdfReader, PdfWriter
+import io
+
+# CSV detection
+ext = csv_name.split('.')[-1]
+if ext == 'xlsx':
+    df = pd.read_excel(io.BytesIO(csv_bytes))
+else:
+    df = pd.read_csv(io.BytesIO(csv_bytes))
+
+codes = df.iloc[:, 0].astype(str).tolist()
+pdf = PdfReader(io.BytesIO(pdf_bytes))
+writer = PdfWriter()
+code_to_page = {}
+for i, page in enumerate(pdf.pages):
+    text = page.extract_text() or ''
+    for code in codes:
+        if code in text:
+            code_to_page[code] = i
+for code in codes:
+    idx = code_to_page.get(code)
+    if idx is not None:
+        writer.add_page(pdf.pages[idx])
+buf = io.BytesIO()
+writer.write(buf)
+result_bytes = buf.getvalue()
+      `);
+      // Get result back to JS
+      return pyodide.globals.get('result_bytes').toJs();
+    }
+
+    document.getElementById('processBtn').onclick = async () => {
+      const status = document.getElementById('status');
+      const pdfFile = document.getElementById('pdfInput').files[0];
+      const csvFile = document.getElementById('orderInput').files[0];
+      if (!pdfFile || !csvFile) {
+        status.textContent = "Upload both PDF and CSV/XLSX!";
         return;
       }
-      // Utility: Load PDF file as ArrayBuffer
-      function readFileAsArrayBuffer(file) {
-        return new Promise((resolve, reject) => {
-          let reader = new FileReader();
-          reader.onload = e => resolve(e.target.result);
-          reader.onerror = reject;
-          reader.readAsArrayBuffer(file);
-        });
+      status.textContent = "Loading Pyodide & reading files...";
+      // Read files as ArrayBuffers
+      const pdfBytes = await pdfFile.arrayBuffer();
+      const csvBytes = await csvFile.arrayBuffer();
+      status.textContent = "Processing in Python (browser)...";
+      try {
+        const reordered = await runPythonReorder(pdfBytes, csvBytes, csvFile.name);
+        const blob = new Blob([reordered], { type: "application/pdf" });
+        const url = URL.createObjectURL(blob);
+        const dl = document.getElementById('downloadLink');
+        dl.href = url;
+        dl.download = "sorted_labels.pdf";
+        dl.style.display = "";
+        status.textContent = "Done! Download below.";
+      } catch (e) {
+        status.textContent = "Error: " + e;
       }
-
-      // Utility: Parse CSV or XLSX to array of codes
-      function parseOrderFile(file) {
-        return new Promise((resolve) => {
-          if (file.name.endsWith(".csv")) {
-            Papa.parse(file, {
-              complete: (results) => {
-                const codes = results.data.map(row => String(row[0]).trim()).filter(x => x && x !== "undefined");
-                resolve(codes);
-              }
-            });
-          } else if (file.name.endsWith(".xlsx")) {
-            const reader = new FileReader();
-            reader.onload = (e) => {
-              const data = new Uint8Array(e.target.result);
-              const workbook = XLSX.read(data, { type: "array" });
-              const sheet = workbook.Sheets[workbook.SheetNames[0]];
-              const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-              const codes = rows.map(row => String(row[0]).trim()).filter(x => x && x !== "undefined");
-              resolve(codes);
-            };
-            reader.readAsArrayBuffer(file);
-          }
-        });
-      }
-
-      // Render PDF page to image (needed for OCR)
-      async function renderPdfPageToImage(pdf, pageIndex) {
-        const page = await pdf.getPage(pageIndex + 1);
-        const viewport = page.getViewport({ scale: 2 });
-        const canvas = document.createElement('canvas');
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-        const ctx = canvas.getContext('2d');
-        await page.render({ canvasContext: ctx, viewport }).promise;
-        return canvas;
-      }
-
-      // OCR image with Tesseract.js
-      async function ocrImage(canvas) {
-        const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
-        return text;
-      }
-
-      // MAIN FUNCTION
-      document.getElementById('processBtn').onclick = async () => {
-        const pdfInput = document.getElementById('pdfInput');
-        const orderInput = document.getElementById('orderInput');
-        const progressDiv = document.getElementById('progress');
-        const progressBar = document.getElementById('progressBar');
-        const downloadLink = document.getElementById('downloadLink');
-        progressDiv.innerText = "";
-
-        // Check file inputs
-        if (!pdfInput.files.length || !orderInput.files.length) {
-          progressDiv.textContent = "Please upload both PDF and CSV/XLSX files!";
-          alert("Please upload both PDF and CSV/XLSX files!");
-          return;
-        }
-        const pdfFile = pdfInput.files[0];
-        const orderFile = orderInput.files[0];
-
-        progressDiv.textContent = "Parsing order file...";
-        progressBar.style.display = "none";
-        progressBar.value = 0;
-        downloadLink.style.display = "none";
-
-        const orderCodes = await parseOrderFile(orderFile);
-        if (!orderCodes.length) {
-          progressDiv.textContent = "No order codes found in uploaded file.";
-          return;
-        }
-
-        progressDiv.textContent = "Loading PDF...";
-        const pdfBytes = await readFileAsArrayBuffer(pdfFile);
-
-        // --- Set PDF.js worker (MUST use correct URL for this version)
-        pdfjsLib.GlobalWorkerOptions.workerSrc =
-          "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.2.67/build/pdf.worker.min.js";
-
-        const pdfDoc = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
-
-        // Set up the progress bar
-        progressBar.max = pdfDoc.numPages;
-        progressBar.value = 0;
-        progressBar.style.display = "";
-
-        // For creating new PDF
-        const PDFLib = window.PDFLib;
-        const outputPdf = await PDFLib.PDFDocument.create();
-
-        let codeToPageIdx = {};
-        let pageImgs = [];
-
-        // OCR each page, update progress
-        for (let i = 0; i < pdfDoc.numPages; i++) {
-          progressDiv.textContent = `Processing page ${i + 1} of ${pdfDoc.numPages}...`;
-          progressBar.value = i;
-          const canvas = await renderPdfPageToImage(pdfDoc, i);
-          const ocrText = await ocrImage(canvas);
-
-          // Try to match with orderCodes
-          for (let code of orderCodes) {
-            if (ocrText.includes(code)) {
-              codeToPageIdx[code] = i;
-              break;
-            }
-          }
-          // Save canvas as PNG for PDF creation
-          pageImgs.push(canvas.toDataURL("image/png"));
-        }
-        progressBar.value = pdfDoc.numPages;
-
-        // Add matched pages to output PDF in order
-        let added = 0;
-        for (let code of orderCodes) {
-          if (codeToPageIdx[code] !== undefined) {
-            const pngUrl = pageImgs[codeToPageIdx[code]];
-            const page = await outputPdf.addPage();
-            const pngImage = await outputPdf.embedPng(pngUrl);
-            const { width, height } = pngImage.scale(1);
-            page.setSize(width, height);
-            page.drawImage(pngImage, { x: 0, y: 0, width, height });
-            added++;
-          }
-        }
-
-        // Download the new PDF
-        if (added > 0) {
-          const outBytes = await outputPdf.save();
-          const blob = new Blob([outBytes], { type: "application/pdf" });
-          downloadLink.href = URL.createObjectURL(blob);
-          downloadLink.download = "sorted_labels.pdf";
-          downloadLink.style.display = "";
-          downloadLink.textContent = "Download Reordered PDF";
-          progressDiv.textContent = `Done! Pages added: ${added}`;
-        } else {
-          progressDiv.textContent = "No matching codes/pages found. Please check your files.";
-          downloadLink.style.display = "none";
-        }
-        progressBar.style.display = "none";
-      };
-    });
+    };
   </script>
 </body>
 </html>
