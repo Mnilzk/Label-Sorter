@@ -19,7 +19,7 @@
   <a id="downloadLink" style="display:none; margin-top:15px;">Download Reordered PDF</a>
 
   <!-- PDF.js for reading PDF -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.2.67/build/pdf.min.js"></script>
   <!-- PDF-lib for creating PDFs -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
   <!-- PapaParse for CSV parsing -->
@@ -28,13 +28,15 @@
   <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
   <!-- Tesseract.js for OCR -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-
+  
   <script>
-    // Wait until all scripts are loaded
-    window.onload = function() {
-      // Check that pdfjsLib loaded correctly
-      if (typeof window['pdfjsLib'] === "undefined") {
-        document.getElementById('progress').innerText = "PDF.js did not load. Please refresh or check your CDN scripts!";
+    // Wait for all scripts and DOM to load before running
+    window.addEventListener('DOMContentLoaded', function() {
+
+      // SAFETY: Check PDF.js loaded
+      if (!window['pdfjsLib']) {
+        document.getElementById('progress').textContent =
+          "PDF.js did not load. Please refresh or check your CDN scripts!";
         return;
       }
 
@@ -91,7 +93,7 @@
         return text;
       }
 
-      // MAIN FUNCTION
+      // Main process function
       document.getElementById('processBtn').onclick = async () => {
         const pdfInput = document.getElementById('pdfInput');
         const orderInput = document.getElementById('orderInput');
@@ -99,7 +101,6 @@
         const progressBar = document.getElementById('progressBar');
         const downloadLink = document.getElementById('downloadLink');
 
-        // SAFETY: Check file inputs
         if (!pdfInput.files.length || !orderInput.files.length) {
           progressDiv.textContent = "Please upload both PDF and CSV/XLSX files!";
           alert("Please upload both PDF and CSV/XLSX files!");
@@ -117,9 +118,11 @@
 
         progressDiv.textContent = "Loading PDF...";
         const pdfBytes = await readFileAsArrayBuffer(pdfFile);
-        // This is the correct way to access pdfjsLib
+
+        // Correct PDF.js init (window.pdfjsLib)
         const pdfjsLib = window['pdfjsLib'];
-        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.worker.min.js";
+        pdfjsLib.GlobalWorkerOptions.workerSrc =
+          "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.2.67/build/pdf.worker.min.js";
         const pdfDoc = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
 
         // Set up the progress bar
@@ -176,7 +179,7 @@
         progressDiv.textContent = "Done!";
         progressBar.style.display = "none";
       };
-    }
+    });
   </script>
 </body>
 </html>
