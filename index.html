@@ -5,28 +5,27 @@
   <title>Label Sorter (Browser-based, No Server)</title>
   <link rel="stylesheet" href="style.css">
   <style>
-    body { font-family: Arial, sans-serif; }
-    h1 { color: #0074d9; }
+    body { font-family: sans-serif; margin: 40px; }
+    #progress { margin-top: 10px; }
     #progressBar { width: 300px; display: none; margin-bottom: 10px; }
     #downloadLink { display: none; margin-top: 15px; }
-    #progress { margin-top: 10px; color: #666; }
   </style>
 </head>
 <body>
   <h1>Label Sorter (Browser-based)</h1>
   <p>
     Upload your PDF of shipping labels and a CSV or XLSX with order codes.<br>
-    The tool will extract and reorder pages to match the order list, all on your device.
+    The tool will extract and reorder pages to match the order list, all on your device.<br>
+    <b>Processing may take several minutes for large PDFs.</b>
   </p>
-  <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label><br><br>
-  <label>Order CSV/XLSX: <input type="file" id="orderInput" accept=".csv,.xlsx"></label><br><br>
+  <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label><br>
+  <label>Order CSV/XLSX: <input type="file" id="orderInput" accept=".csv,.xlsx"></label><br>
   <button id="processBtn">Process</button>
   <div id="progress"></div>
   <progress id="progressBar" value="0" max="100"></progress>
   <a id="downloadLink">Download Reordered PDF</a>
   
-  <!-- Libraries -->
-  <!-- Use jsdelivr for PDF.js (it works for both core and worker) -->
+  <!-- PDF.js for reading PDF -->
   <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.2.67/build/pdf.min.js"></script>
   <!-- PDF-lib for creating PDFs -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
@@ -36,6 +35,7 @@
   <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
   <!-- Tesseract.js for OCR -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  
   <script>
     // Utility: Load PDF file as ArrayBuffer
     function readFileAsArrayBuffer(file) {
@@ -90,13 +90,15 @@
       return text;
     }
 
-    // MAIN FUNCTION
     document.getElementById('processBtn').onclick = async () => {
       const pdfInput = document.getElementById('pdfInput');
       const orderInput = document.getElementById('orderInput');
       const progressDiv = document.getElementById('progress');
       const progressBar = document.getElementById('progressBar');
       const downloadLink = document.getElementById('downloadLink');
+      progressDiv.textContent = "";
+      downloadLink.style.display = "none";
+      progressBar.style.display = "none";
 
       // SAFETY: Check file inputs
       if (!pdfInput.files.length || !orderInput.files.length) {
@@ -108,31 +110,25 @@
       const orderFile = orderInput.files[0];
 
       progressDiv.textContent = "Parsing order file...";
-      progressBar.style.display = "block";
       progressBar.value = 0;
-      downloadLink.style.display = "none";
+      progressBar.max = 100;
+      progressBar.style.display = "block";
 
       const orderCodes = await parseOrderFile(orderFile);
 
       progressDiv.textContent = "Loading PDF...";
-      // PDF.js setup
       const pdfBytes = await readFileAsArrayBuffer(pdfFile);
 
-      // Always use the correct worker!
-      if (window['pdfjsLib']) {
-        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.2.67/build/pdf.worker.min.js";
+      // Setup pdf.js worker
+      if (window.pdfjsLib) {
+        pdfjsLib.GlobalWorkerOptions.workerSrc =
+          "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.2.67/build/pdf.worker.min.js";
       } else {
         progressDiv.textContent = "PDF.js did not load. Please refresh or check your CDN scripts!";
-        progressBar.style.display = "none";
         return;
       }
 
       const pdfDoc = await pdfjsLib.getDocument({ data: pdfBytes }).promise;
-
-      // Set up the progress bar
-      progressBar.max = pdfDoc.numPages;
-      progressBar.value = 0;
-      progressBar.style.display = "block";
 
       // For creating new PDF
       const PDFLib = window.PDFLib;
@@ -141,10 +137,16 @@
       let codeToPageIdx = {};
       let pageImgs = [];
 
+      progressBar.max = pdfDoc.numPages;
+      progressBar.value = 0;
+      progressDiv.textContent = `Processing ${pdfDoc.numPages} pages...`;
+
       // OCR each page, update progress
       for (let i = 0; i < pdfDoc.numPages; i++) {
         progressDiv.textContent = `Processing page ${i + 1} of ${pdfDoc.numPages}...`;
-        progressBar.value = i;
+        progressBar.value = i + 1;
+        await new Promise(r => setTimeout(r, 50)); // Slight delay for UI
+
         const canvas = await renderPdfPageToImage(pdfDoc, i);
         const ocrText = await ocrImage(canvas);
 
