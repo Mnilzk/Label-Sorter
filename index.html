@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Label Sorter (Pure Python in Browser, CSV-only)</title>
+  <title>Label Sorter (Pure Browser/Pyodide, CSV only)</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 40px; }
     h1 { color: #1983e6; }
@@ -11,11 +11,11 @@
   </style>
 </head>
 <body>
-  <h1>Label Sorter (CSV only, runs in your browser)</h1>
+  <h1>Label Sorter (CSV only, all in your browser)</h1>
   <p>
-    Upload a PDF of shipping labels and a <b>CSV</b> order file.<br>
-    Pages will be reordered to match your order list.<br>
-    <b>No server. 100% local processing via <a href="https://pyodide.org/" target="_blank">Pyodide</a>.</b>
+    Upload your <b>PDF</b> of shipping labels and a <b>CSV</b> order file.<br>
+    The pages will be reordered to match the order list on your device.<br>
+    <b>Note:</b> This uses pure Python in your browser (<a href="https://pyodide.org/" target="_blank">Pyodide</a>).
   </p>
   <label>PDF file: <input type="file" id="pdfInput" accept=".pdf"></label>
   <br><br>
@@ -24,7 +24,7 @@
   <button id="runBtn">Sort Labels</button>
   <br>
   <progress id="progressBar" value="0" max="100" style="display:none"></progress>
-  <div id="messages">Loading Python (Pyodide)...</div>
+  <div id="messages">Please wait, loading Python...</div>
   <a id="downloadLink" style="display:none; margin-top:10px;">Download Sorted PDF</a>
 
   <!-- Pyodide CDN -->
@@ -34,48 +34,53 @@
     let pyodide = null;
     let mainPyCode = null;
 
-    // Load Pyodide and main.py code
+    // Load Pyodide and Python code
     async function initPyodide() {
-      document.getElementById("messages").textContent = "Loading Python (Pyodide)...";
+      document.getElementById("messages").textContent = "Loading Python runtime (Pyodide)...";
       pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/" });
       document.getElementById("messages").textContent = "Loaded Python. Downloading logic...";
-      // fetch main.py (should be in the same repo as index.html)
+      // Fetch main.py from your repo (must be in the same directory as index.html)
       mainPyCode = await fetch("main.py").then(resp => resp.text());
-      await pyodide.loadPackage("PyPDF2");
+      document.getElementById("messages").textContent = "Installing pandas...";
+      await pyodide.loadPackage("pandas");
+      document.getElementById("messages").textContent = "Ready! Upload files and press 'Sort Labels'.";
       pyodideReady = true;
-      document.getElementById("messages").textContent = "Ready! Upload your files and press Sort Labels.";
     }
+
     initPyodide();
 
+    // Button click handler
     document.getElementById('runBtn').onclick = async () => {
       if (!pyodideReady) {
-        document.getElementById("messages").textContent = "Please wait until Python loads...";
+        document.getElementById("messages").textContent = "Python still loading, please wait...";
         return;
       }
       let pdfFile = document.getElementById('pdfInput').files[0];
       let csvFile = document.getElementById('csvInput').files[0];
       if (!pdfFile || !csvFile) {
-        document.getElementById("messages").textContent = "Please select BOTH PDF and CSV files.";
+        document.getElementById("messages").textContent = "Please select both files!";
         return;
       }
-      document.getElementById("messages").textContent = "Reading files...";
-      document.getElementById("progressBar").style.display = "";
-      document.getElementById("progressBar").value = 0;
-      document.getElementById("downloadLink").style.display = "none";
+      // Read files as ArrayBuffer and send to Python
+      const readAsArrayBuffer = file => new Promise(res => { let r = new FileReader(); r.onload = e => res(new Uint8Array(e.target.result)); r.readAsArrayBuffer(file); });
+      const pdfBuf = await readAsArrayBuffer(pdfFile);
+      const csvBuf = await readAsArrayBuffer(csvFile);
 
-      // Helper to read file as Uint8Array
-      const fileToUint8Array = file => new Promise(res => {
-        let r = new FileReader(); r.onload = e => res(new Uint8Array(e.target.result)); r.readAsArrayBuffer(file);
-      });
-      const pdfBuf = await fileToUint8Array(pdfFile);
-      const csvBuf = await fileToUint8Array(csvFile);
+      // Expose progress update from Python
+      window.setProgress = pct => {
+        let bar = document.getElementById("progressBar");
+        bar.style.display = "";
+        bar.value = pct;
+      }
+      window.setMessage = msg => { document.getElementById("messages").textContent = msg; }
 
-      // Expose progress/message
-      window.setProgress = v => document.getElementById("progressBar").value = v;
-      window.setMessage = msg => document.getElementById("messages").textContent = msg;
-
+      // Register Python helpers
       pyodide.globals.set("pdf_data", pdfBuf);
       pyodide.globals.set("csv_data", csvBuf);
+
+      document.getElementById("messages").textContent = "Running Python, sorting labels...";
+      document.getElementById("progressBar").style.display = "";
+      document.getElementById("progressBar").value = 0;
 
       try {
         await pyodide.runPythonAsync(mainPyCode + `
