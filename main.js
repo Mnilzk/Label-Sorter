@@ -59,9 +59,11 @@ document.getElementById('processBtn').onclick = async () => {
     const pdfFile = document.getElementById('pdfInput').files[0];
     const orderFile = document.getElementById('orderInput').files[0];
     const progressBar = document.getElementById('progressBar');
-    if (!pdfFile || !orderFile) {
-        alert("Please upload both PDF and CSV/XLSX files!");
-        return;
+   if (!pdfFile || !orderFile) {
+    document.getElementById('progress').textContent = "Please upload both PDF and CSV/XLSX files!";
+    alert("Please upload both PDF and CSV/XLSX files!");
+    return;
+}
     }
     document.getElementById('progress').textContent = "Parsing order file...";
     progressBar.style.display = "none";
